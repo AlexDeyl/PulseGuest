@@ -28,6 +28,7 @@ export const demoSurvey: SurveySchema = {
         { value: "clean", label: "Чистота" },
         { value: "speed", label: "Скорость" },
         { value: "price", label: "Цена/качество" },
+        { value: "other", label: "Другое" },
       ],
     },
     {
@@ -51,3 +52,4 @@ export const demoSurvey: SurveySchema = {
     },
   ],
 };
+

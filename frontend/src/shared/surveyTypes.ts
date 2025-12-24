@@ -15,6 +15,7 @@ export type SurveyField = {
   label: string;
   required?: boolean;
   placeholder?: string;
+  hint?: string;
   options?: Option[];
   min?: number;
   max?: number;
