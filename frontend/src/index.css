@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+
+:root {
+  /* default theme */
+  color-scheme: dark;
+
+  /* semantic tokens */
+  --pg-bg: #0b0f1a;
+  --pg-text: rgba(255,255,255,0.92);
+  --pg-muted: rgba(255,255,255,0.70);
+  --pg-faint: rgba(255,255,255,0.50);
+
+  --pg-card: rgba(255,255,255,0.06);
+  --pg-card-hover: rgba(255,255,255,0.10);
+  --pg-border: rgba(255,255,255,0.10);
+
+  --pg-popover-bg: rgba(10,12,20,0.72);
+  --pg-popover-border: rgba(255,255,255,0.12);
+
+  --pg-input-bg: rgba(255,255,255,0.06);
+  --pg-input-border: rgba(255,255,255,0.12);
+  --pg-input-border-focus: rgba(255,255,255,0.22);
+  --pg-placeholder: rgba(255,255,255,0.40);
+
+  /* accents */
+  --pg-accent-1: rgba(99,102,241,0.20);
+  --pg-accent-2: rgba(236,72,153,0.18);
+  --pg-accent-3: rgba(16,185,129,0.14);
+
+  --pg-blob-1: rgba(99,102,241,0.22);
+  --pg-blob-2: rgba(236,72,153,0.20);
+  --pg-blob-3: rgba(16,185,129,0.14);
+
+  /* primary button gradient */
+  --pg-gradient: linear-gradient(90deg, rgba(99,102,241,1), rgba(236,72,153,1), rgba(16,185,129,1));
+  --pg-on-primary: rgba(10,12,20,0.92);
+
+  /* wave */
+  --pg-wave: rgba(255,255,255,0.16);
+  --pg-wave-2: rgba(99,102,241,0.12);
+
+  /* motion */
+  --pg-t: 240ms;
+
+  --pg-inset: rgba(255,255,255,0.08);
+  --pg-shadow: 0 20px 80px rgba(0,0,0,0.16);
+}
+
+html[data-theme="light"] {
+  background:
+    radial-gradient(900px 600px at 15% 0%, rgba(255,255,255,0.85), transparent 55%),
+    radial-gradient(1200px 800px at 10% 10%, var(--pg-accent-1), transparent 55%),
+    radial-gradient(1000px 700px at 90% 20%, var(--pg-accent-2), transparent 55%),
+    radial-gradient(900px 700px at 50% 100%, var(--pg-accent-3), transparent 55%),
+    var(--pg-bg);
+    
+  color-scheme: light;
+
+  /* фон: чуть холоднее, не белый */
+  --pg-bg: #e9eef6;
+
+  /* текст: контрастнее (важно для “четкости”) */
+  --pg-text: rgba(9, 12, 18, 0.94);
+  --pg-muted: rgba(9, 12, 18, 0.66);
+  --pg-faint: rgba(9, 12, 18, 0.46);
+
+  /* glass слои: более “плотные” и читаемые */
+  --pg-card: rgba(255, 255, 255, 0.78);
+  --pg-card-hover: rgba(255, 255, 255, 0.92);
+
+  /* бордеры: чуть темнее + “дороже” */
+  --pg-border: rgba(9, 12, 18, 0.14);
+
+  /* popover (селекты/календарь): чистый, но не белый */
+  --pg-popover-bg: rgba(255, 255, 255, 0.96);
+  --pg-popover-border: rgba(9, 12, 18, 0.16);
+
+  /* инпуты: контрастнее, чтобы не сливались */
+  --pg-input-bg: rgba(255, 255, 255, 0.92);
+  --pg-input-border: rgba(9, 12, 18, 0.18);
+  --pg-input-border-focus: rgba(9, 12, 18, 0.32);
+  --pg-placeholder: rgba(9, 12, 18, 0.44);
+
+  /* акценты: чуть более “чистые” */
+  --pg-accent-1: rgba(99, 102, 241, 0.14);
+  --pg-accent-2: rgba(236, 72, 153, 0.12);
+  --pg-accent-3: rgba(16, 185, 129, 0.10);
+
+  /* блюры: чтобы фон в light был заметнее, но не кислотный */
+  --pg-blob-1: rgba(99, 102, 241, 0.20);
+  --pg-blob-2: rgba(236, 72, 153, 0.16);
+  --pg-blob-3: rgba(16, 185, 129, 0.12);
+
+  /* волна (wipe) */
+  --pg-wave: rgba(9, 12, 18, 0.10);
+  --pg-wave-2: rgba(99, 102, 241, 0.10);
+
+  /* градиент кнопки: чуть менее “неоновый” в light */
+  --pg-gradient: linear-gradient(
+    90deg,
+    rgba(99, 102, 241, 0.92),
+    rgba(236, 72, 153, 0.92),
+    rgba(16, 185, 129, 0.92)
+  );
+
+  --pg-on-primary: rgba(9, 12, 18, 0.94);
+}
+
+/* smooth transitions */
+* {
+  transition:
+    background-color var(--pg-t) ease,
+    color var(--pg-t) ease,
+    border-color var(--pg-t) ease,
+    box-shadow var(--pg-t) ease;
+}
+
+body {
+  background:
+    radial-gradient(1200px 800px at 10% 10%, var(--pg-accent-1), transparent 55%),
+    radial-gradient(1000px 700px at 90% 20%, var(--pg-accent-2), transparent 55%),
+    radial-gradient(900px 700px at 50% 100%, var(--pg-accent-3), transparent 55%),
+    var(--pg-bg);
+  color: var(--pg-text);
+}
+
+/* DayPicker theme */
+.pg-calendar .rdp {
+  --rdp-cell-size: 42px;
+  --rdp-accent-color: rgba(0,0,0,0); /* we style ourselves */
+  --rdp-background-color: rgba(0,0,0,0);
+  --rdp-outline: var(--pg-border);
+  --rdp-outline-selected: var(--pg-input-border-focus);
+  margin: 0;
+  color: var(--pg-text);
+}
+.pg-calendar .rdp-caption_label { font-weight: 600; color: var(--pg-text); }
+.pg-calendar .rdp-nav_button { color: var(--pg-muted); }
+.pg-calendar .rdp-day { color: var(--pg-text); border-radius: 14px; }
+.pg-calendar .rdp-day:hover:not([disabled]):not(.rdp-day_selected) { background: var(--pg-card-hover); }
+.pg-calendar .rdp-day_selected,
+.pg-calendar .rdp-day_selected:hover { background: var(--pg-card-hover); color: var(--pg-text); }
+.pg-calendar .rdp-day_outside { color: var(--pg-faint); }
+
+
+
+@property --wipe {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+@supports (view-transition-name: none) {
+  html { view-transition-name: root; }
+
+  ::view-transition,
+  ::view-transition-group(root),
+  ::view-transition-image-pair(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    pointer-events: none;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: pg-wipe 760ms cubic-bezier(.2,.8,.2,1) both;
+  }
+
+  ::view-transition-new(root) {
+    clip-path: polygon(
+      0% 0%,
+      calc(var(--wipe) + 2%) 0%,
+      calc(var(--wipe) + 0%) 18%,
+      calc(var(--wipe) + 3%) 36%,
+      calc(var(--wipe) + 1%) 52%,
+      calc(var(--wipe) + 4%) 68%,
+      calc(var(--wipe) + 2%) 84%,
+      calc(var(--wipe) + 0%) 100%,
+      0% 100%
+    );
+  }
+
+  ::view-transition-old(root) {
+    clip-path: polygon(
+      calc(var(--wipe) - 2%) 0%,
+      100% 0%,
+      100% 100%,
+      calc(var(--wipe) - 2%) 100%,
+      calc(var(--wipe) + 0%) 84%,
+      calc(var(--wipe) - 2%) 68%,
+      calc(var(--wipe) + 1%) 52%,
+      calc(var(--wipe) - 1%) 36%,
+      calc(var(--wipe) + 0%) 18%
+    );
+  }
+
+  @keyframes pg-wipe {
+    from { --wipe: 0%; }
+    to { --wipe: 100%; }
+  }
+}
