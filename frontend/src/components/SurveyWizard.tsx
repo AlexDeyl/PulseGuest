@@ -26,13 +26,24 @@ function isEmpty(v: unknown) {
 export default function SurveyWizard({
   schema,
   onSubmit,
+  submitLabel = "Отправить",
+  successTitle = "Спасибо!",
+  successText = "Ваш отзыв отправлен.",
 }: {
   schema: SurveySchema;
   onSubmit: (answers: Answers) => Promise<void> | void;
+  submitLabel?: string;
+  successTitle?: string;
+  successText?: string;
 }) {
   const [i, setI] = useState(0);
   const [answers, setAnswers] = useState<Answers>({});
   const [done, setDone] = useState(false);
+
+  // ✅ Шаг B: аккуратный submit-state
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   const field = schema.fields[i];
 
   const progress = useMemo(() => {
@@ -66,8 +77,28 @@ export default function SurveyWizard({
   }
 
   async function finish() {
-    await onSubmit(answers);
-    setDone(true);
+    if (submitting) return;
+    if (!canGoNext(field)) return;
+
+    setSubmitError(null);
+    setSubmitting(true);
+
+    try {
+      await onSubmit(answers); // ✅ сюда PublicSurveyPage передаёт POST /submissions
+      setDone(true);
+    } catch (e: any) {
+      const msg =
+        typeof e?.detail === "string"
+          ? e.detail
+          : e?.detail
+          ? JSON.stringify(e.detail)
+          : e?.message
+          ? String(e.message)
+          : "Не удалось отправить ответы";
+      setSubmitError(msg);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (done) {
@@ -77,11 +108,12 @@ export default function SurveyWizard({
           <CheckCircle2 className="h-7 w-7 text-emerald-400/90" />
         </div>
         <h2 className="mt-4 text-xl font-semibold text-[color:var(--pg-text)]">
-          Спасибо!
+          {successTitle}
         </h2>
         <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
-          Отзыв отправлен (демо). Дальше подключим сохранение и уведомления.
+          {successText}
         </p>
+
         <div className="mt-6">
           <Button
             variant="secondary"
@@ -89,6 +121,8 @@ export default function SurveyWizard({
               setDone(false);
               setI(0);
               setAnswers({});
+              setSubmitError(null);
+              setSubmitting(false);
             }}
           >
             Заполнить ещё раз
@@ -97,6 +131,7 @@ export default function SurveyWizard({
       </GlassCard>
     );
   }
+
 
   return (
     <GlassCard>
@@ -165,12 +200,25 @@ export default function SurveyWizard({
         </motion.div>
       </AnimatePresence>
 
+      {/* ✅ Шаг B: показываем ошибку отправки */}
+      {submitError ? (
+        <div
+          role="alert"
+          className="mt-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"
+        >
+          {submitError}
+        </div>
+      ) : null}
+
       <div className="mt-6 flex items-center justify-between gap-3">
         <Button
           variant="secondary"
-          onClick={() => setI((x) => Math.max(0, x - 1))}
-          disabled={i === 0}
-          className={i === 0 ? "opacity-60" : ""}
+          onClick={() => {
+            setSubmitError(null);
+            setI((x) => Math.max(0, x - 1));
+          }}
+          disabled={i === 0 || submitting}
+          className={i === 0 || submitting ? "opacity-60" : ""}
         >
           <ArrowLeft className="h-4 w-4" />
           Назад
@@ -179,11 +227,14 @@ export default function SurveyWizard({
         {i < schema.fields.length - 1 ? (
           <Button
             onClick={() => {
+              if (submitting) return;
               if (!canGoNext(field)) return;
+
+              setSubmitError(null);
               setI((x) => Math.min(schema.fields.length - 1, x + 1));
             }}
-            disabled={!canGoNext(field)}
-            className={!canGoNext(field) ? "opacity-60" : ""}
+            disabled={submitting || !canGoNext(field)}
+            className={submitting || !canGoNext(field) ? "opacity-60" : ""}
           >
             Далее
             <ArrowRight className="h-4 w-4" />
@@ -191,10 +242,10 @@ export default function SurveyWizard({
         ) : (
           <Button
             onClick={finish}
-            disabled={!canGoNext(field)}
-            className={!canGoNext(field) ? "opacity-60" : ""}
+            disabled={submitting || !canGoNext(field)}
+            className={submitting || !canGoNext(field) ? "opacity-60" : ""}
           >
-            Отправить
+            {submitting ? "Отправляем…" : submitLabel}
           </Button>
         )}
       </div>
