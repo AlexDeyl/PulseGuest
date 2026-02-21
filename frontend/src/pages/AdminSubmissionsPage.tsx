@@ -4,7 +4,25 @@ import AppShell from "../components/AppShell";
 import GlassCard from "../components/GlassCard";
 import { Button } from "../components/ui/Button";
 import { useAuth } from "../shared/auth";
-import { API_BASE } from "../shared/api/public";
+import { adminJson } from "../shared/adminApi";
+import { useDevMode } from "../shared/devMode";
+
+type Org = {
+  id: number;
+  name: string;
+  slug: string;
+  is_active: boolean;
+};
+
+type LocShort = {
+  id: number;
+  organization_id: number;
+  name: string;
+  slug: string;
+  code: string;
+  type: string;
+  is_active: boolean;
+};
 
 type ListItem = {
   id: number;
@@ -24,35 +42,45 @@ type ListResp = {
   items: ListItem[];
 };
 
-async function adminGetJson<T>(path: string): Promise<T> {
-  const access = localStorage.getItem("pg_access_token") || "";
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: access ? { authorization: `Bearer ${access}` } : {},
-  });
+function errToText(e: any, devEnabled: boolean) {
+  if (!e) return "Ошибка запроса. Попробуйте ещё раз.";
+  if (typeof e?.detail === "string") return e.detail;
+  if (typeof e?.detail?.detail === "string") return e.detail.detail;
 
-  if (!res.ok) {
-    const ct = res.headers.get("content-type") || "";
-    const detail = ct.includes("application/json") ? await res.json() : await res.text();
-    const err: any = new Error(`API ${res.status}: ${path}`);
-    err.status = res.status;
-    err.detail = detail;
-    throw err;
+  if (devEnabled) {
+    try {
+      return JSON.stringify(e?.detail ?? e, null, 2);
+    } catch {
+      return String(e?.message ?? "Ошибка");
+    }
   }
-  return (await res.json()) as T;
+
+  return "Не удалось загрузить данные. Попробуйте обновить страницу.";
 }
 
 export default function AdminSubmissionsPage() {
   const { me } = useAuth();
+  const { enabled: devEnabled } = useDevMode();
   const nav = useNavigate();
 
-  const locations = me?.allowed_locations ?? [];
+  const allowedLocations: LocShort[] = (me?.allowed_locations ?? []) as any;
 
+  // org selector
+  const [orgs, setOrgs] = useState<Org[]>([]);
+  const [orgId, setOrgId] = useState<number | "">(() => {
+    const raw = localStorage.getItem("pg_selected_org_id");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) ? n : "";
+  });
+
+  // location selector
   const [locationId, setLocationId] = useState<number | "">(() => {
     const raw = localStorage.getItem("pg_selected_location_id");
     const n = raw ? Number(raw) : NaN;
     return Number.isFinite(n) ? n : "";
   });
 
+  // paging + filters
   const [limit] = useState(20);
   const [offset, setOffset] = useState(0);
 
@@ -65,9 +93,68 @@ export default function AdminSubmissionsPage() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (locationId !== "") return;
-    if (locations.length) setLocationId(locations[0].id);
-  }, [locations, locationId]);
+    let alive = true;
+
+    (async () => {
+      try {
+        const items = await adminJson<Org[]>("/api/admin/admin/organizations");
+        if (!alive) return;
+        setOrgs(items.filter((o) => o.is_active));
+      } catch {
+        const ids = Array.from(new Set(allowedLocations.map((l) => l.organization_id)));
+        const fallback = ids.map((id) => ({
+          id,
+          name: `Организация #${id}`,
+          slug: `org-${id}`,
+          is_active: true,
+        }));
+        if (!alive) return;
+        setOrgs(fallback);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (orgId !== "") return;
+    if (orgs.length) setOrgId(orgs[0].id);
+  }, [orgs, orgId]);
+
+  useEffect(() => {
+    if (orgId === "") return;
+    localStorage.setItem("pg_selected_org_id", String(orgId));
+  }, [orgId]);
+
+  const locationsByOrg = useMemo(() => {
+    if (orgId === "") return [];
+    return allowedLocations
+      .filter((l) => l.organization_id === Number(orgId))
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [allowedLocations, orgId]);
+
+  useEffect(() => {
+    if (orgId === "") return;
+
+    const ids = new Set(locationsByOrg.map((l) => Number(l.id)));
+    const cur = locationId === "" ? null : Number(locationId);
+
+    if (locationsByOrg.length === 0) {
+      setLocationId("");
+      setData(null);
+      return;
+    }
+
+    if (cur == null || !ids.has(cur)) {
+      const next = Number(locationsByOrg[0].id);
+      setOffset(0);
+      setLocationId(next);
+      localStorage.setItem("pg_selected_location_id", String(next));
+    }
+  }, [orgId, locationsByOrg, locationId]);
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -80,21 +167,34 @@ export default function AdminSubmissionsPage() {
   }, [limit, offset, ratingMin, ratingMax, hasComment]);
 
   useEffect(() => {
-    if (locationId === "") return;
+    let alive = true;
 
-    localStorage.setItem("pg_selected_location_id", String(locationId));
-    setLoading(true);
-    setErr(null);
+    (async () => {
+      if (locationId === "") return;
 
-    adminGetJson<ListResp>(`/api/admin/admin/locations/${locationId}/submissions?${query}`)
-      .then(setData)
-      .catch((e: any) => {
-        const detail = e?.detail ? JSON.stringify(e.detail) : "";
-        setErr(`Не удалось загрузить отзывы. ${detail}`);
+      setLoading(true);
+      setErr(null);
+
+      try {
+        const r = await adminJson<ListResp>(
+          `/api/admin/admin/locations/${locationId}/submissions?${query}`
+        );
+        if (!alive) return;
+        setData(r);
+      } catch (e: any) {
+        if (!alive) return;
+        setErr(errToText(e, devEnabled));
         setData(null);
-      })
-      .finally(() => setLoading(false));
-  }, [locationId, query]);
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [locationId, query, devEnabled]);
 
   const total = data?.total ?? 0;
   const canPrev = offset > 0;
@@ -107,28 +207,49 @@ export default function AdminSubmissionsPage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Admin</div>
-              <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">
-                Отзывы (submissions)
-              </h1>
+              <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Отзывы</h1>
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <div className="text-sm text-[color:var(--pg-muted)]">Локация:</div>
+                <div className="text-sm text-[color:var(--pg-muted)]">Организация:</div>
+                <select
+                  className="rounded-2xl border border-[color:var(--pg-input-border)] bg-[color:var(--pg-input-bg)] px-4 py-2 text-sm text-[color:var(--pg-text)] outline-none"
+                  value={orgId}
+                  onChange={(e) => {
+                    setOffset(0);
+                    setOrgId(Number(e.target.value));
+                  }}
+                  disabled={!orgs.length}
+                >
+                  {orgs.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
 
+                <div className="text-sm text-[color:var(--pg-muted)]">Локация:</div>
                 <select
                   className="rounded-2xl border border-[color:var(--pg-input-border)] bg-[color:var(--pg-input-bg)] px-4 py-2 text-sm text-[color:var(--pg-text)] outline-none"
                   value={locationId}
                   onChange={(e) => {
                     setOffset(0);
                     setLocationId(Number(e.target.value));
+                    localStorage.setItem("pg_selected_location_id", String(e.target.value));
                   }}
-                  disabled={!locations.length}
+                  disabled={!locationsByOrg.length}
                 >
-                  {locations.map((l: any) => (
+                  {locationsByOrg.map((l) => (
                     <option key={l.id} value={l.id}>
-                      {l.name} • {l.slug}
+                      {l.name}
                     </option>
                   ))}
                 </select>
+
+                {devEnabled && (
+                  <span className="font-mono text-xs text-[color:var(--pg-muted)]">
+                    org={orgId || "—"} loc={locationId || "—"}
+                  </span>
+                )}
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -164,13 +285,22 @@ export default function AdminSubmissionsPage() {
                   <option value="no">Только без текста</option>
                 </select>
 
-                <Button variant="secondary" onClick={() => nav("/admin", { replace: false })}>
+                <Button variant="secondary" onClick={() => nav("/admin")}>
                   Назад на дашборд
+                </Button>
+
+                <Button variant="secondary" onClick={() => nav(0)}>
+                  Обновить
                 </Button>
               </div>
 
               {loading && <div className="mt-3 text-xs text-[color:var(--pg-faint)]">Загрузка…</div>}
-              {err && <div className="mt-3 text-xs text-red-600">{err}</div>}
+              {err && <div className="mt-3 whitespace-pre-wrap text-xs text-rose-300">{err}</div>}
+              {!loading && locationId === "" && (
+                <div className="mt-3 text-xs text-[color:var(--pg-faint)]">
+                  Нет доступных локаций в выбранной организации.
+                </div>
+              )}
             </div>
 
             <div className="text-sm text-[color:var(--pg-muted)]">
@@ -208,10 +338,7 @@ export default function AdminSubmissionsPage() {
                       {r.email || r.name ? `${r.name || "—"} • ${r.email || "—"}` : "—"}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <Button
-                        variant="secondary"
-                        onClick={() => nav(`/admin/submissions/${r.id}`)}
-                      >
+                      <Button variant="secondary" onClick={() => nav(`/admin/submissions/${r.id}`)}>
                         Открыть
                       </Button>
                     </td>
@@ -230,7 +357,11 @@ export default function AdminSubmissionsPage() {
           </div>
 
           <div className="mt-4 flex items-center justify-between">
-            <Button variant="secondary" disabled={!canPrev} onClick={() => setOffset(Math.max(0, offset - limit))}>
+            <Button
+              variant="secondary"
+              disabled={!canPrev}
+              onClick={() => setOffset(Math.max(0, offset - limit))}
+            >
               Назад
             </Button>
 

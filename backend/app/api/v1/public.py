@@ -1,12 +1,11 @@
 from __future__ import annotations
 import re
 
+from datetime import datetime, timezone, date
 
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 
 from app.api.v1.deps import get_db
 from app.core.config import settings
@@ -14,12 +13,15 @@ from app.models.location import Location
 from app.models.survey import Survey, SurveyVersion
 from app.models.submission import Submission
 
-router = APIRouter(prefix="/public", tags=["public"])
+# Patch 8.2.x
+from app.models.stay import Stay  # type: ignore
+
+router = APIRouter(tags=["public"])
 
 
 def build_greeting(display_name: str | None = None) -> str:
     """
-    MVP greeting. Позже сюда добавим персонализацию через GuestProfile из PMS.
+    MVP greeting. Позже сюда добавим персонализацию через PMS/API.
     """
     if display_name:
         return (
@@ -56,58 +58,51 @@ def _validate_answers_against_schema(schema: dict | None, answers: dict) -> list
 
         stype = slide.get("type")
         if stype in ("rating", "nps"):
-            field = slide.get("field")
-            if not field:
-                continue
-
+            name = slide.get("field")
             required = bool(slide.get("required"))
-            val = answers.get(field)
-
-            if required and (val is None or val == ""):
-                errors.append(f"missing:{field}")
+            if not name:
+                continue
+            if required and (name not in answers or answers.get(name) in (None, "")):
+                errors.append(f"missing:{name}")
                 continue
 
-            if val is None or val == "":
-                continue
-
-            try:
-                ival = int(val)
-            except Exception:
-                errors.append(f"invalid:{field}:not_int")
-                continue
-
-            scale = slide.get("scale") or 10
-            try:
-                scale = int(scale)
-            except Exception:
-                scale = 10
-
-            # допускаем 0..scale (безопаснее, чем ломать клиент на '0')
-            if ival < 0 or ival > scale:
-                errors.append(f"invalid:{field}:out_of_range_0..{scale}")
+            if name in answers and answers.get(name) not in (None, ""):
+                try:
+                    val = int(answers.get(name))  # type: ignore
+                except Exception:
+                    errors.append(f"invalid:{name}:int")
+                    continue
+                # optional scale check
+                scale = slide.get("scale")
+                if scale is not None:
+                    try:
+                        scale_int = int(scale)
+                        if val < 0 or val > scale_int:
+                            errors.append(f"invalid:{name}:range")
+                    except Exception:
+                        pass
 
         elif stype == "text":
-            field = slide.get("field")
-            if not field:
-                continue
-
+            name = slide.get("field")
             required = bool(slide.get("required"))
-            val = answers.get(field)
-
-            if required and (val is None or val == ""):
-                errors.append(f"missing:{field}")
+            if not name:
+                continue
+            if required and (name not in answers or answers.get(name) in (None, "")):
+                errors.append(f"missing:{name}")
                 continue
 
-            if val is None or val == "":
-                continue
-
-            if not isinstance(val, str):
-                errors.append(f"invalid:{field}:not_string")
-                continue
-
-            max_len = slide.get("maxLength")
-            if isinstance(max_len, int) and len(val) > max_len:
-                errors.append(f"invalid:{field}:too_long>{max_len}")
+            if name in answers and answers.get(name) not in (None, ""):
+                if not isinstance(answers.get(name), str):
+                    errors.append(f"invalid:{name}:str")
+                    continue
+                max_len = slide.get("maxLength") or slide.get("max_length")
+                if max_len is not None:
+                    try:
+                        ml = int(max_len)
+                        if len(str(answers.get(name))) > ml:
+                            errors.append(f"invalid:{name}:maxlen")
+                    except Exception:
+                        pass
 
         elif stype == "contact":
             fields = slide.get("fields") or []
@@ -118,138 +113,150 @@ def _validate_answers_against_schema(schema: dict | None, answers: dict) -> list
                 if not isinstance(f, dict):
                     continue
                 name = f.get("field")
+                ftype = f.get("type") or "text"
+                required = bool(f.get("required"))
+
                 if not name:
                     continue
 
-                required = bool(f.get("required"))
-                val = answers.get(name)
-
-                if required and (val is None or val == ""):
+                if required and (name not in answers or answers.get(name) in (None, "")):
                     errors.append(f"missing:{name}")
                     continue
 
-                if val is None or val == "":
-                    continue
+                if name in answers and answers.get(name) not in (None, ""):
+                    val = answers.get(name)
 
-                ftype = f.get("type")
-                if ftype == "email":
-                    if not isinstance(val, str) or not _EMAIL_RE.match(val.strip()):
-                        errors.append(f"invalid:{name}:email")
+                    if ftype == "email":
+                        if not isinstance(val, str) or not _EMAIL_RE.match(val.strip()):
+                            errors.append(f"invalid:{name}:email")
+                    else:
+                        if not isinstance(val, str):
+                            errors.append(f"invalid:{name}:str")
 
     return errors
 
 
-async def _get_location_by_slug_or_error(db: AsyncSession, slug: str) -> Location:
-    rows = (
-        await db.execute(
-            select(Location)
-            .where(Location.slug == slug, Location.is_active == True)  # noqa: E712
-            .order_by(desc(Location.created_at), desc(Location.id))
-        )
-    ).scalars().all()
-
-    if not rows:
-        raise HTTPException(status_code=404, detail="Location not found")
-
-    # Важно: по модели slug уникален ТОЛЬКО внутри organization.
-    # Поэтому если есть несколько org с одинаковым slug — это конфиг-ошибка.
-    if len(rows) > 1:
-        raise HTTPException(
-            status_code=409,
-            detail="Slug is not unique. Use unique slugs across organizations (or extend resolve endpoint later).",
-        )
-
-    return rows[0]
-
-
-async def _get_active_for_location(db: AsyncSession,
-                                   location_id: int) -> dict | None:
-    """
-    Возвращает active-объект вида:
-      {"survey_id", "version_id", "version", "schema", "widget_config"}
-    или None
-    """
-    row = (
-        await db.execute(
-            select(SurveyVersion, Survey)
-            .join(Survey, Survey.id == SurveyVersion.survey_id)
-            .where(
-                Survey.location_id == location_id,
-                SurveyVersion.is_active == True,  # noqa: E712
-            )
-            .order_by(
-                desc(SurveyVersion.version),
-                desc(SurveyVersion.created_at),
-                desc(SurveyVersion.id),
-            )
-            .limit(1)
-        )
-    ).first()
-
-    if not row:
+def _norm_room(room: str | None) -> str | None:
+    if room is None:
         return None
-
-    ver, survey = row
-    return {
-        "survey_id": survey.id,
-        "version_id": ver.id,
-        "version": ver.version,
-        "schema": ver.schema,
-        "widget_config": ver.widget_config,
-    }
+    r = str(room).strip()
+    if not r:
+        return None
+    return r
 
 
-async def _validate_version_belongs_to_location(
-    db: AsyncSession, *, version_id: int, location_id: int
-) -> bool:
+async def _find_current_stay_for_room(
+    db: AsyncSession,
+    *,
+    location_id: int,
+    room: str,
+    on: date | None = None,
+) -> Stay | None:
     """
-    True если версия существует, активна и принадлежит survey этой локации.
+    Ищем актуальный stay для комнаты на дату on:
+      checkin_at <= on < checkout_at
     """
-    row = (
+    on = on or datetime.now(timezone.utc).date()
+
+    s = (
         await db.execute(
-            select(SurveyVersion.id)
-            .join(Survey, Survey.id == SurveyVersion.survey_id)
+            select(Stay)
             .where(
-                Survey.location_id == location_id,
-                SurveyVersion.id == version_id,
-                SurveyVersion.is_active == True,  # noqa: E712
+                Stay.location_id == location_id,
+                Stay.room == room,
+                Stay.checkin_at <= on,
+                Stay.checkout_at >= on,
             )
+            .order_by(desc(Stay.checkin_at), desc(Stay.id))
             .limit(1)
         )
     ).scalar_one_or_none()
 
-    return row is not None
+    return s
+
+
+async def _find_room_location_in_org(
+    db: AsyncSession,
+    *,
+    organization_id: int,
+    room: str,
+) -> Location | None:
+    """
+    Best-effort mapping room -> Location внутри одной организации.
+
+    MVP (как в resolve):
+      - code == room
+      - name == room
+      - slug ILIKE %room%
+    """
+    room_q = _norm_room(room)
+    if not room_q:
+        return None
+
+    room_loc = (
+        await db.execute(
+            select(Location)
+            .where(
+                Location.organization_id == organization_id,
+                Location.is_active == True,  # noqa: E712
+                or_(
+                    Location.code == room_q,
+                    Location.name == room_q,
+                    Location.slug.ilike(f"%{room_q}%"),
+                ),
+            )
+            .order_by(desc(Location.id))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return room_loc
+
+
+def _stay_to_guest(stay: Stay) -> dict:
+    return {
+        "stay_id": stay.id,
+        "room": stay.room,
+        "guest_name": stay.guest_name,
+        "checkin_at": stay.checkin_at.isoformat(),
+        "checkout_at": stay.checkout_at.isoformat(),
+        "reservation_code": stay.reservation_code,
+        "source": stay.source,
+    }
 
 
 @router.get("/resolve/{slug}")
-async def resolve_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
+async def resolve_by_slug(
+    slug: str,
+    room: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Статичный QR ведёт на /public/resolve/{slug}
-    Мы по slug находим Location и возвращаем активную анкету (если есть) + greeting.
+    Public resolve by slug:
+      - найти Location по slug (активную)
+      - найти active survey version для location
+      - (Patch 8.2.2/8.2.3) greeting + PMS-like guest name by ?room=
+    """
+    slug_norm = slug.strip().lower()
 
-    Важно: slug по бизнес-правилу должен быть уникальным глобально (иначе resolve неоднозначен).
-    Если найдём несколько локаций с одним slug — вернём 409, чтобы не было скрытых ошибок.
-    """
     locs = (
-        await db.execute(
-            select(Location)
-            .where(Location.slug == slug, Location.is_active == True)  # noqa: E712
-            .order_by(desc(Location.created_at), desc(Location.id))
+        (
+            await db.execute(
+                select(Location).where(
+                    Location.slug == slug_norm,
+                    Location.is_active == True,  # noqa: E712
+                )
+            )
         )
-    ).scalars().all()
-
+        .scalars()
+        .all()
+    )
     if not locs:
-        raise HTTPException(status_code=404, detail="Location not found")
-
-    if len(locs) > 1:
-        raise HTTPException(
-            status_code=409,
-            detail="Slug is not unique. Make slugs unique across organizations.",
-        )
+        raise HTTPException(status_code=404, detail="Not Found")
 
     loc = locs[0]
 
-    # Ищем активную версию опроса для этой локации (через join SurveyVersion -> Survey)
+    # active survey (как было, без is_archived на SurveyVersion!)
     row = (
         await db.execute(
             select(SurveyVersion, Survey)
@@ -278,6 +285,44 @@ async def resolve_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
             "widget_config": ver.widget_config,
         }
 
+    # guest lookup by room
+    guest = None
+    display_name = None
+
+    async def find_stay(location_id: int) -> Stay | None:
+        room_q = _norm_room(room)
+        if not room_q:
+            return None
+        return await _find_current_stay_for_room(db, location_id=location_id, room=room_q)
+
+    stay = await find_stay(loc.id)
+    if not stay and room:
+        room_q = _norm_room(room)
+        room_loc = (
+            await db.execute(
+                select(Location)
+                .where(
+                    Location.organization_id == loc.organization_id,
+                    Location.is_active == True,  # noqa: E712
+                    or_(
+                        Location.code == room_q,
+                        Location.name == room_q,
+                        Location.slug.ilike(f"%{room_q}%"),
+                    ),
+                )
+                .order_by(desc(Location.id))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if room_loc:
+            stay = await find_stay(room_loc.id)
+
+    if stay:
+        display_name = stay.guest_name
+        # guest включает stay_id
+        guest = _stay_to_guest(stay)
+
     return {
         "location": {
             "id": loc.id,
@@ -288,31 +333,23 @@ async def resolve_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
             "slug": loc.slug,
         },
         "active": active,
-        "guest": None,  # следующий спринт: PMS/CSV
-        "greeting": build_greeting(None),
+        "guest": guest,
+        "greeting": build_greeting(display_name),
     }
 
 
 @router.get("/locations/{location_id}/active-survey")
 async def get_active_survey(location_id: int, db: AsyncSession = Depends(get_db)):
-    """
-    Legacy endpoint (оставляем чтобы фронт не упал).
-    Теперь делает выбор активной версии через join и возвращает
-    как старый "плоский" формат, так и новый "active".
-    """
-    loc = (
-        await db.execute(select(Location).where(Location.id == location_id))
-    ).scalar_one_or_none()
-
+    loc = (await db.execute(select(Location).where(Location.id == location_id))).scalar_one_or_none()
     if not loc or not loc.is_active:
-        return {"active": None}
+        raise HTTPException(status_code=404, detail="Location not found")
 
     row = (
         await db.execute(
             select(SurveyVersion, Survey)
             .join(Survey, Survey.id == SurveyVersion.survey_id)
             .where(
-                Survey.location_id == location_id,
+                Survey.location_id == loc.id,
                 SurveyVersion.is_active == True,  # noqa: E712
             )
             .order_by(
@@ -325,21 +362,15 @@ async def get_active_survey(location_id: int, db: AsyncSession = Depends(get_db)
     ).first()
 
     if not row:
-        return {"active": None}
+        raise HTTPException(status_code=404, detail="No active survey")
 
     ver, survey = row
-    active = {
+    return {
         "survey_id": survey.id,
         "version_id": ver.id,
         "version": ver.version,
         "schema": ver.schema,
         "widget_config": ver.widget_config,
-    }
-
-    # Старое поведение (плоские поля) + новый ключ active
-    return {
-        **active,
-        "active": active,
     }
 
 
@@ -349,8 +380,11 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
     payload ожидается:
       { "version_id": int (optional), "location_id": int, "answers": {...}, "meta": {...optional...} }
 
-    Если version_id не передали — берём активную версию для location_id.
-    Если передали — проверяем что она активна и принадлежит этой локации.
+    Patch 8.2.3:
+      meta может содержать stay_id и/или room — сервер сам подтвердит stay и положит данные гостя в meta.
+
+    Patch 8.4:
+      stay может лежать на "room"-локации в той же организации, даже если submission отправляем на "hotel"-локацию.
     """
     # 1) parse
     try:
@@ -365,9 +399,7 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
     version_id_raw = payload.get("version_id")
 
     # 2) check location
-    loc = (
-        await db.execute(select(Location).where(Location.id == location_id))
-    ).scalar_one_or_none()
+    loc = (await db.execute(select(Location).where(Location.id == location_id))).scalar_one_or_none()
     if not loc or not loc.is_active:
         raise HTTPException(status_code=404, detail="Location not found")
 
@@ -378,7 +410,7 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
                 select(SurveyVersion, Survey)
                 .join(Survey, Survey.id == SurveyVersion.survey_id)
                 .where(
-                    Survey.location_id == location_id,
+                    Survey.location_id == loc.id,
                     SurveyVersion.is_active == True,  # noqa: E712
                 )
                 .order_by(
@@ -391,46 +423,32 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
         ).first()
 
         if not row:
-            raise HTTPException(status_code=404, detail="Active survey not found for this location")
+            raise HTTPException(status_code=404, detail="No active survey")
 
-        ver, survey = row
-
+        ver, _survey = row
     else:
         try:
             version_id = int(version_id_raw)
         except Exception:
-            raise HTTPException(status_code=400, detail="version_id must be int")
+            raise HTTPException(status_code=400, detail="Invalid version_id")
 
-        row = (
-            await db.execute(
-                select(SurveyVersion, Survey)
-                .join(Survey, Survey.id == SurveyVersion.survey_id)
-                .where(
-                    Survey.location_id == location_id,
-                    SurveyVersion.id == version_id,
-                    SurveyVersion.is_active == True,  # noqa: E712
-                )
-                .limit(1)
-            )
-        ).first()
+        ver = (await db.execute(select(SurveyVersion).where(SurveyVersion.id == version_id))).scalar_one_or_none()
+        if not ver:
+            raise HTTPException(status_code=404, detail="Survey version not found")
 
-        if not row:
-            raise HTTPException(status_code=404, detail="Active survey version not found for this location")
+        survey = (await db.execute(select(Survey).where(Survey.id == ver.survey_id))).scalar_one_or_none()
+        if not survey or survey.location_id != loc.id:
+            raise HTTPException(status_code=400, detail="version_id does not belong to location")
 
-        ver, survey = row
-
-    # 4) schema validation (required + basic)
-    errors = _validate_answers_against_schema(getattr(ver, "schema", None), answers)
+    # 4) validate against schema
+    errors = _validate_answers_against_schema(ver.schema, answers)
     if errors:
         raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Schema validation failed",
-                "errors": errors,
-            },
+            status_code=422,
+            detail={"message": "Schema validation failed", "errors": errors},
         )
 
-    # 5) meta enrich
+    # 5) meta enrich (base)
     meta = payload.get("meta") or {}
     if not isinstance(meta, dict):
         meta = {}
@@ -438,6 +456,67 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
     meta.setdefault("user_agent", request.headers.get("user-agent"))
     if settings.STORE_IP:
         meta.setdefault("ip", request.client.host if request.client else None)
+
+    # 5.1) attach stay (do NOT trust frontend blindly)
+    on = datetime.now(timezone.utc).date()
+
+    stay_obj: Stay | None = None
+
+    stay_id_raw = payload.get("stay_id") or meta.get("stay_id")
+    room_raw = payload.get("room") or meta.get("room")
+    room_norm = _norm_room(room_raw)
+
+    # a) prefer stay_id if provided (but verify it belongs to the same organization)
+    # IMPORTANT: submission может быть отправлен на "hotel" локацию,
+    # а stay лежит на "room" локации внутри этой же организации.
+    if stay_id_raw is not None:
+        try:
+            stay_id = int(stay_id_raw)
+        except Exception:
+            stay_id = 0
+
+        if stay_id > 0:
+            s = (
+                await db.execute(
+                    select(Stay)
+                    .join(Location, Location.id == Stay.location_id)
+                    .where(
+                        Stay.id == stay_id,
+                        Location.organization_id == loc.organization_id,
+                        Stay.checkin_at <= on,
+                        Stay.checkout_at >= on,
+                    )
+                )
+            ).scalar_one_or_none()
+            if s:
+                stay_obj = s
+
+    # b) fallback by room in current location
+    if stay_obj is None and room_norm:
+        stay_obj = await _find_current_stay_for_room(
+            db, location_id=location_id, room=room_norm, on=on
+        )
+
+    # c) fallback: room may map to another location inside org (room-location)
+    if stay_obj is None and room_norm:
+        room_loc = await _find_room_location_in_org(
+            db, organization_id=loc.organization_id, room=room_norm
+        )
+        if room_loc and room_loc.id != location_id:
+            stay_obj = await _find_current_stay_for_room(
+                db, location_id=room_loc.id, room=room_norm, on=on
+            )
+
+    # c) enrich meta
+    if stay_obj is not None:
+        meta["stay_id"] = stay_obj.id
+        meta["room"] = stay_obj.room
+        meta["guest_name"] = stay_obj.guest_name
+        meta["checkin_at"] = stay_obj.checkin_at.isoformat()
+        meta["checkout_at"] = stay_obj.checkout_at.isoformat()
+        meta["reservation_code"] = stay_obj.reservation_code
+        meta["stay_source"] = stay_obj.source
+        meta["stay_location_id"] = stay_obj.location_id
 
     # 6) create
     sub = Submission(
