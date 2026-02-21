@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import AppShell from "../components/AppShell";
 import { API_BASE } from "./api/public";
 
 type TokenPair = {
@@ -207,11 +206,11 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (isInitializing) {
     return (
-      <AppShell>
-        <div className="mx-auto max-w-xl text-sm text-[color:var(--pg-muted)]">
+      <div className="min-h-screen">
+        <div className="mx-auto max-w-xl px-4 py-10 text-sm text-[color:var(--pg-muted)]">
           Загрузка…
         </div>
-      </AppShell>
+      </div>
     );
   }
 

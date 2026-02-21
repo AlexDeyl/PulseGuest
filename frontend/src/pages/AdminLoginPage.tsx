@@ -6,6 +6,7 @@ import AppShell from "../components/AppShell";
 import GlassCard from "../components/GlassCard";
 import { Button } from "../components/ui/Button";
 import { useAuth } from "../shared/auth";
+import { useDevMode } from "../shared/devMode";
 
 export default function AdminLoginPage() {
   const { login } = useAuth();
@@ -16,6 +17,8 @@ export default function AdminLoginPage() {
   const [password, setPassword] = useState("Admin123!");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const { enabled: devEnabled } = useDevMode();
+  
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,8 +29,8 @@ export default function AdminLoginPage() {
       const to = loc?.state?.from || "/admin";
       nav(to, { replace: true });
     } catch (e: any) {
-      const detail = e?.detail ? JSON.stringify(e.detail) : "";
-      setErr(`Не удалось войти. Проверь логин/пароль. ${detail}`);
+      const detail = devEnabled && e?.detail ? ` ${JSON.stringify(e.detail)}` : "";
+      setErr(`Не удалось войти. Проверь логин/пароль.${detail}`);
     } finally {
       setLoading(false);
     }
@@ -98,10 +101,12 @@ export default function AdminLoginPage() {
                 {loading ? "Входим…" : "Войти"}
               </Button>
 
-              <p className="text-xs text-[color:var(--pg-faint)]">
-                После входа идём в защищённый /admin и подтягиваем /api/admin/admin/me.
-              </p>
-            </form>
+              {devEnabled && (
+                <p className="text-xs text-[color:var(--pg-faint)]">
+                  Dev: после входа идём в /admin и подтягиваем /api/admin/admin/me.
+                </p>
+              )}
+              </form>
           </GlassCard>
         </motion.div>
       </div>

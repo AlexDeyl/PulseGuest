@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, DateTime, ForeignKey, Integer, Boolean, UniqueConstraint
+from sqlalchemy import String, DateTime, ForeignKey, Integer, Boolean, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
@@ -13,7 +13,8 @@ class Survey(Base):
         ForeignKey("locations.id", ondelete="CASCADE")
     )
     name: Mapped[str] = mapped_column(String(200))
-
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False,
+                                              server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     location = relationship("Location", back_populates="surveys")
@@ -29,7 +30,8 @@ class SurveyVersion(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    survey_id: Mapped[int] = mapped_column(ForeignKey("surveys.id", ondelete="CASCADE"))
+    survey_id: Mapped[int] = mapped_column(ForeignKey("surveys.id",
+                                                      ondelete="CASCADE"))
 
     version: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -43,5 +45,6 @@ class SurveyVersion(Base):
 
     survey = relationship("Survey", back_populates="versions")
     submissions = relationship(
-        "Submission", back_populates="survey_version", cascade="all,delete-orphan"
+        "Submission", back_populates="survey_version",
+        cascade="all,delete-orphan"
     )

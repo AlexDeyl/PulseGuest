@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import SurveyWizard from "../components/SurveyWizard";
 import GlassCard from "../components/GlassCard";
@@ -16,251 +16,211 @@ function humanLabel(field: string, ftype?: string) {
   const key = field.toLowerCase();
   if (ftype === "email" || key.includes("email")) return "Email";
   if (key === "name" || key.includes("first_name")) return "Имя";
-  if (key.includes("phone") || key.includes("tel")) return "Телефон";
+  if (key.includes("comment")) return "Комментарий";
+  if (key.includes("rating")) return "Оценка";
   return field;
 }
 
-function adaptBackendSchema(
-  schema: Record<string, unknown> | null | undefined,
-  locationName?: string
-): SurveySchema | null {
-  const title =
-    (schema?.title as string | undefined) ?? locationName ?? "Анкета гостя";
-  const slides = (schema?.slides as unknown[] | undefined) ?? [];
-  if (!Array.isArray(slides) || slides.length === 0) return null;
+function adaptBackendSchema(active: ActiveSurvey): SurveySchema {
+  const schema = active.schema ?? {};
+  const title = schema?.title ?? "Анкета";
+  const slides = schema?.slides ?? [];
 
   const fields: SurveyField[] = [];
 
-  for (const slide of slides) {
-    if (!slide || typeof slide !== "object") continue;
-    const s = slide as Record<string, unknown>;
-    const stype = String(s.type ?? "");
-    const slideTitle = (s.title as string | undefined) ?? "Вопрос";
+  for (const s of slides) {
+    if (!s || typeof s !== "object") continue;
+
+    const stype = (s as any).type;
 
     if (stype === "rating" || stype === "nps") {
-      const fieldId =
-        (s.field as string | undefined) ??
-        (s.id as string | undefined) ??
-        `rating_${fields.length}`;
+      const fieldId = (s as any).field || "rating_overall";
       fields.push({
         id: fieldId,
         type: "rating_1_10",
-        label: slideTitle,
-        required: Boolean(s.required),
-        hint: typeof s.hint === "string" ? s.hint : undefined,
+        label: (s as any).title ?? humanLabel(fieldId, stype),
+        required: Boolean((s as any).required),
+        min: 0,
+        max: Number((s as any).scale ?? 10),
       });
-      continue;
     }
 
     if (stype === "text") {
-      const fieldId =
-        (s.field as string | undefined) ??
-        (s.id as string | undefined) ??
-        `text_${fields.length}`;
+      const fieldId = (s as any).field;
+      if (!fieldId) continue;
       fields.push({
         id: fieldId,
         type: "textarea",
-        label: slideTitle,
-        required: Boolean(s.required),
-        placeholder:
-          typeof s.placeholder === "string" ? s.placeholder : "Напишите пару слов…",
-        hint: typeof s.hint === "string" ? s.hint : undefined,
+        label: (s as any).title ?? humanLabel(fieldId, stype),
+        required: Boolean((s as any).required),
+        placeholder: (s as any).placeholder ?? "",
+        hint: (s as any).hint ?? "",
       });
-      continue;
     }
 
     if (stype === "contact") {
-      const contactFields = (s.fields as unknown[] | undefined) ?? [];
-      if (!Array.isArray(contactFields)) continue;
+      const ff = (s as any).fields ?? [];
+      if (!Array.isArray(ff)) continue;
 
-      for (const f of contactFields) {
+      for (const f of ff) {
         if (!f || typeof f !== "object") continue;
-        const ff = f as Record<string, unknown>;
-        const fieldId = ff.field as string | undefined;
+        const fieldId = (f as any).field;
         if (!fieldId) continue;
 
-        const ftype = ff.type as string | undefined;
+        // SurveyWizard поддерживает "text"/"textarea"/"rating_1_10".
+        // Email поле пока рендерим как text (валидирует сервер).
         fields.push({
           id: fieldId,
           type: "text",
-          label: humanLabel(fieldId, ftype),
-          required: Boolean(ff.required),
-          placeholder: ftype === "email" ? "name@example.com" : undefined,
-          hint:
-            ftype === "email"
-              ? "Email нужен только чтобы связаться при необходимости."
-              : undefined,
+          label: (f as any).label ?? humanLabel(fieldId, (f as any).type),
+          required: Boolean((f as any).required),
+          placeholder:
+            (f as any).type === "email" ? "name@example.com" : (f as any).placeholder ?? "",
         });
       }
-      continue;
     }
   }
 
-  if (fields.length === 0) return null;
-
-  return {
-    id: "active",
-    title,
-    fields,
-  };
+  return { id: String(active.version_id), title, fields };
 }
 
-export default function PublicSurveyPage({ slug: slugProp }: { slug?: string }) {
+export default function PublicSurveyPage(props: { slug?: string }) {
   const params = useParams();
-  const slug = useMemo(
-    () => slugProp ?? params.slug ?? "main",
-    [params.slug, slugProp]
-  );
+  const slug = props.slug ?? params.slug ?? "main";
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const room = useMemo(() => {
+    const r = (searchParams.get("room") || "").trim();
+    return r || null;
+  }, [searchParams]);
 
   const [resolved, setResolved] = useState<ResolveResponse | null>(null);
   const [active, setActive] = useState<ActiveSurvey | null>(null);
-  const [uiSchema, setUiSchema] = useState<SurveySchema | null>(null);
+  const [schema, setSchema] = useState<SurveySchema | null>(null);
 
-  async function load() {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const r = await resolveBySlug(slug);
-      setResolved(r);
-
-      // 1) Prefer active from resolve
-      if (r.active?.schema) {
-        setActive(r.active);
-        setUiSchema(
-          adaptBackendSchema(r.active.schema as Record<string, unknown>, r.location?.name)
-        );
-        setLoading(false);
-        return;
-      }
-
-      // 2) Fallback: active-survey by location_id
-      const fallback = await getActiveSurvey(r.location.id);
-      const a = (fallback as any)?.active as ActiveSurvey | null | undefined;
-      setActive(a ?? null);
-      setUiSchema(adaptBackendSchema((a?.schema as any) ?? null, r.location?.name));
-      setLoading(false);
-    } catch (e: any) {
-      const detail = e?.detail ?? e?.message ?? "Ошибка загрузки";
-      setError(typeof detail === "string" ? detail : JSON.stringify(detail));
-      setLoading(false);
-    }
-  }
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      setLoading(true);
+      setErr(null);
+
+      try {
+        const r = await resolveBySlug(slug, room || undefined);
+        if (!alive) return;
+
+        setResolved(r);
+
+        let a = r.active as any;
+
+        // fallback: legacy endpoint
+        if (!a) {
+          const fallback = await getActiveSurvey(r.location.id);
+          a = (fallback as any)?.active ?? (fallback as any);
+        }
+
+        if (!a || !a.schema) {
+          setActive(null);
+          setSchema(null);
+          return;
+        }
+
+        setActive(a);
+        setSchema(adaptBackendSchema(a));
+      } catch (e: any) {
+        const detail = e?.detail ? JSON.stringify(e.detail) : "";
+        setErr(`Не удалось загрузить анкету\n${detail}`);
+        setResolved(null);
+        setActive(null);
+        setSchema(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug]);
+    return () => {
+      alive = false;
+    };
+  }, [slug, room]);
 
-  const locationName = resolved?.location?.name ?? "PulseGuest";
+  async function onSubmit(answers: Record<string, unknown>) {
+    if (!resolved) throw new Error("No resolved");
+    if (!active) throw new Error("No active");
 
-  const wc: any =
-    active?.widget_config ??
-    resolved?.active?.widget_config ??
-    null;
+    const meta: Record<string, unknown> = {
+      slug,
+      source: "web",
+    };
 
-  const submitLabel: string = wc?.texts?.submit ?? "Отправить";
-  const successText: string = wc?.texts?.thanks ?? "Ваш отзыв отправлен.";
+    if (room) meta.room = room;
+    if (resolved.guest?.stay_id) meta.stay_id = resolved.guest.stay_id;
+
+    await submitSubmission({
+      location_id: resolved.location.id,
+      version_id: active.version_id,
+      answers,
+      meta,
+      // legacy shortcuts (server всё равно перепроверит)
+      room: room || undefined,
+      stay_id: resolved.guest?.stay_id,
+    });
+  }
+
+  const greeting = resolved?.greeting ?? "Оставьте отзыв за 30 секунд";
 
   return (
-      <AppShell>
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <section className="space-y-4">
-            <GlassCard>
-              <div className="text-sm text-[color:var(--pg-muted)]">{locationName}</div>
-              <h1 className="mt-1 text-3xl font-semibold text-[color:var(--pg-text)]">
-                Оставьте отзыв за 30 секунд
-              </h1>
-              <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
-                {resolved?.greeting ??
-                  "Небольшая анкета помогает улучшать сервис. Спасибо, что делитесь впечатлением."}
-              </p>
-            </GlassCard>
+    <AppShell>
+      <div className="mx-auto max-w-2xl space-y-6">
+        <GlassCard>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold text-[color:var(--pg-text)]">{greeting}</h1>
+            <p className="text-sm text-[color:var(--pg-muted)]">
+              Небольшая анкета помогает улучшать сервис. Спасибо, что делитесь впечатлением.
+            </p>
 
-            {loading ? (
-              <GlassCard>
-                <div className="text-sm text-[color:var(--pg-muted)]">Загружаем анкету…</div>
-                <div className="mt-3 h-10 w-2/3 animate-pulse rounded-2xl bg-[color:var(--pg-card-hover)]" />
-                <div className="mt-3 h-28 animate-pulse rounded-2xl bg-[color:var(--pg-card-hover)]" />
-              </GlassCard>
-            ) : error ? (
-              <GlassCard>
-                <div className="text-sm font-semibold text-[color:var(--pg-text)]">
-                  Не удалось загрузить анкету
-                </div>
-                <pre className="mt-3 whitespace-pre-wrap break-words rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-3 text-xs text-[color:var(--pg-muted)]">
-                  {error}
-                </pre>
-                <div className="mt-4">
-                  <button
-                    type="button"
-                    onClick={load}
-                    className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-4 py-2 text-sm text-[color:var(--pg-text)] hover:bg-[color:var(--pg-card-hover)]"
-                  >
-                    Повторить
-                  </button>
-                </div>
-              </GlassCard>
-            ) : !uiSchema ? (
-              <GlassCard>
-                <div className="text-sm font-semibold text-[color:var(--pg-text)]">
-                  Активный опрос не найден
-                </div>
-                <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
-                  Похоже, для этой локации пока не включена активная версия анкеты.
-                </p>
-              </GlassCard>
-            ) : (
-              <SurveyWizard
-                schema={uiSchema}
-                submitLabel={submitLabel}
-                successText={successText}
-                onSubmit={async (answers) => {
-                  const location_id = resolved?.location?.id;
-                  if (!location_id) throw new Error("location_id not resolved");
-
-                  await submitSubmission({
-                    location_id,
-                    version_id: active?.version_id ?? undefined,
-                    answers: answers as Record<string, unknown>,
-                    meta: { slug, source: "web" },
-                  });
-                }}
-              />
+            {room && (
+              <div className="text-xs text-[color:var(--pg-faint)]">
+                Комната: <span className="text-[color:var(--pg-text)]">{room}</span>
+              </div>
             )}
-          </section>
 
-          <aside className="space-y-4">
-            <GlassCard>
-              <h3 className="text-sm font-semibold text-[color:var(--pg-text)]">
-                Почему это удобно
-              </h3>
-              <ul className="mt-3 space-y-2 text-sm text-[color:var(--pg-muted)]">
-                <li>• Быстро — 1–2 минуты</li>
-                <li>• Красиво на мобилке</li>
-                <li>• Ответы сразу попадают в аналитику</li>
-              </ul>
-            </GlassCard>
+            {resolved?.guest?.guest_name && (
+              <div className="text-xs text-[color:var(--pg-faint)]">
+                Гость:{" "}
+                <span className="text-[color:var(--pg-text)]">{resolved.guest.guest_name}</span>
+              </div>
+            )}
+          </div>
+        </GlassCard>
 
-            <GlassCard>
-              <h3 className="text-sm font-semibold text-[color:var(--pg-text)]">
-                Тех.инфо
-              </h3>
-              <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
-                slug: <span className="font-mono">{slug}</span>
-                <br />
-                location_id:{" "}
-                <span className="font-mono">{resolved?.location?.id ?? "—"}</span>
-                <br />
-                version_id:{" "}
-                <span className="font-mono">{active?.version_id ?? "—"}</span>
-              </p>
-            </GlassCard>
-          </aside>
-        </div>
-      </AppShell>
-    );
-  }
+        {loading && (
+          <GlassCard>
+            <div className="text-sm text-[color:var(--pg-muted)]">Загрузка…</div>
+          </GlassCard>
+        )}
+
+        {err && (
+          <GlassCard>
+            <div className="whitespace-pre-wrap text-sm text-red-600">{err}</div>
+          </GlassCard>
+        )}
+
+        {!loading && !err && !schema && (
+          <GlassCard>
+            <div className="text-sm text-[color:var(--pg-muted)]">
+              Для этой локации пока нет активной анкеты.
+            </div>
+          </GlassCard>
+        )}
+
+        {!loading && !err && schema && (
+          <SurveyWizard schema={schema} onSubmit={onSubmit} />
+        )}
+      </div>
+    </AppShell>
+  );
+}

@@ -1,31 +1,35 @@
-import { Link, NavLink } from "react-router-dom";
-import { Moon, Sun } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Code2, LogOut, Moon, Sun } from "lucide-react";
 import Backdrop from "./Backdrop";
 import { TooltipProvider, Tooltip } from "./ui/Tooltip";
 import { useTheme } from "../shared/useTheme";
+import { useAuth } from "../shared/auth";
+import { useDevMode } from "../shared/devMode";
 
-function NavItem({ to, label }: { to: string; label: string }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        [
-          "rounded-2xl px-3 py-2 text-sm font-medium transition",
-          isActive
-            ? "bg-[color:var(--pg-card-hover)]"
-            : "hover:bg-[color:var(--pg-card-hover)]",
-          "text-[color:var(--pg-muted)] hover:text-[color:var(--pg-text)]",
-        ].join(" ")
-      }
-    >
-      {label}
-    </NavLink>
-  );
-}
+type ShellMode = "public" | "auth" | "admin";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const { theme, toggle } = useTheme();
   const isDark = theme === "dark";
+
+  const { isAuthenticated, logout } = useAuth();
+  const { available: devAvailable, enabled: devEnabled, setEnabled: setDevEnabled } =
+    useDevMode();
+
+  const loc = useLocation();
+  const nav = useNavigate();
+
+  const mode: ShellMode = (() => {
+    if (loc.pathname === "/") return "auth";
+    if (loc.pathname === "/admin/login") return "auth";
+    if (loc.pathname.startsWith("/admin")) return "admin";
+    return "public"; // /:slug
+  })();
+
+  const onLogout = async () => {
+    await logout();
+    nav("/", { replace: true });
+  };
 
   return (
     <TooltipProvider>
@@ -34,26 +38,68 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <header className="sticky top-0 z-40 border-b border-[color:var(--pg-border)] bg-[color:var(--pg-card)]/60 backdrop-blur-xl">
           <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-            <Link to="/" className="flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)]">
-                PG
-              </div>
-              <div className="leading-tight">
-                <div className="text-sm font-semibold text-[color:var(--pg-text)]">
-                  PulseGuest
+            {mode === "public" ? (
+              <div className="flex items-center gap-3" aria-label="PulseGuest">
+                <div className="grid h-10 w-10 place-items-center rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)]">
+                  PG
                 </div>
-                <div className="text-xs text-[color:var(--pg-muted)]">
-                  Feedback platform
+                <div className="leading-tight">
+                  <div className="text-sm font-semibold text-[color:var(--pg-text)]">
+                    PulseGuest
+                  </div>
+                  <div className="text-xs text-[color:var(--pg-muted)]">
+                    Feedback platform
+                  </div>
                 </div>
               </div>
-            </Link>
+            ) : (
+              <Link to={mode === "admin" ? "/admin" : "/"} className="flex items-center gap-3">
+                <div className="grid h-10 w-10 place-items-center rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)]">
+                  PG
+                </div>
+                <div className="leading-tight">
+                  <div className="text-sm font-semibold text-[color:var(--pg-text)]">
+                    PulseGuest
+                  </div>
+                  <div className="text-xs text-[color:var(--pg-muted)]">
+                    Feedback platform
+                  </div>
+                </div>
+              </Link>
+            )}
 
             <div className="flex items-center gap-2">
-              <nav className="hidden items-center gap-1 sm:flex">
-                <NavItem to="/" label="Анкета" />
-                <NavItem to="/admin/login" label="Вход" />
-                <NavItem to="/admin" label="Админка" />
-              </nav>
+              {mode === "admin" && devAvailable && (
+                <Tooltip content={devEnabled ? "Dev mode: ON" : "Dev mode: OFF"}>
+                  <button
+                    type="button"
+                    onClick={() => setDevEnabled(!devEnabled)}
+                    className={[
+                      "inline-flex h-10 items-center gap-2 rounded-2xl border px-3 text-sm font-medium transition",
+                      devEnabled
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                        : "border-[color:var(--pg-border)] bg-[color:var(--pg-card)] text-[color:var(--pg-text)] hover:bg-[color:var(--pg-card-hover)]",
+                    ].join(" ")}
+                    aria-label="Toggle dev mode"
+                  >
+                    <Code2 className="h-4 w-4" />
+                    <span className="hidden sm:inline">Dev</span>
+                  </button>
+                </Tooltip>
+              )}
+
+              {mode === "admin" && isAuthenticated && (
+                <Tooltip content="Выйти">
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="inline-flex h-10 items-center gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 text-sm font-medium text-[color:var(--pg-text)] hover:bg-[color:var(--pg-card-hover)]"
+                  >
+                    <LogOut className="h-4 w-4 text-[color:var(--pg-muted)]" />
+                    <span className="hidden sm:inline">Выйти</span>
+                  </button>
+                </Tooltip>
+              )}
 
               <Tooltip content={isDark ? "Светлая тема" : "Тёмная тема"}>
                 <button
@@ -69,15 +115,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   )}
                 </button>
               </Tooltip>
-            </div>
-          </div>
-
-          {/* Mobile nav (optional, но аккуратно) */}
-          <div className="mx-auto max-w-5xl px-4 pb-3 sm:hidden">
-            <div className="flex gap-1">
-              <NavItem to="/" label="Анкета" />
-              <NavItem to="/admin/login" label="Вход" />
-              <NavItem to="/admin" label="Админка" />
             </div>
           </div>
         </header>

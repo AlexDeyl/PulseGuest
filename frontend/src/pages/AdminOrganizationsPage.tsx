@@ -5,6 +5,7 @@ import GlassCard from "../components/GlassCard";
 import { Button } from "../components/ui/Button";
 import { useAuth } from "../shared/auth";
 import { adminJson } from "../shared/adminApi";
+import { useDevMode } from "../shared/devMode";
 
 type Org = {
   id: number;
@@ -13,19 +14,25 @@ type Org = {
   is_active: boolean;
 };
 
-function errToText(e: any) {
-  if (!e) return "Ошибка";
+function errToText(e: any, devEnabled: boolean) {
+  if (!e) return "Ошибка запроса. Попробуйте ещё раз.";
   if (typeof e?.detail === "string") return e.detail;
-  if (e?.detail?.detail) return String(e.detail.detail);
-  try {
-    return JSON.stringify(e?.detail ?? e);
-  } catch {
-    return String(e?.message ?? "Ошибка");
+  if (typeof e?.detail?.detail === "string") return e.detail.detail;
+
+  if (devEnabled) {
+    try {
+      return JSON.stringify(e?.detail ?? e, null, 2);
+    } catch {
+      return String(e?.message ?? "Ошибка");
+    }
   }
+
+  return "Ошибка запроса. Попробуйте обновить страницу.";
 }
 
 export default function AdminOrganizationsPage() {
   const { me } = useAuth();
+  const { enabled: devEnabled } = useDevMode();
   const nav = useNavigate();
 
   const canManage = useMemo(() => {
@@ -37,7 +44,7 @@ export default function AdminOrganizationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // единая форма create/edit
+  // create/edit form
   const [orgId, setOrgId] = useState<number | null>(null);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -57,7 +64,7 @@ export default function AdminOrganizationsPage() {
       const data = await adminJson<Org[]>("/api/admin/admin/organizations");
       setItems(data);
     } catch (e: any) {
-      setError(errToText(e));
+      setError(errToText(e, devEnabled));
     } finally {
       setLoading(false);
     }
@@ -65,6 +72,7 @@ export default function AdminOrganizationsPage() {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startEdit = (o: Org) => {
@@ -93,7 +101,7 @@ export default function AdminOrganizationsPage() {
       resetForm();
       await load();
     } catch (e: any) {
-      setError(errToText(e));
+      setError(errToText(e, devEnabled));
     }
   };
 
@@ -104,7 +112,7 @@ export default function AdminOrganizationsPage() {
           <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Admin</div>
           <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Организации</h1>
           <div className="mt-1 text-xs text-[color:var(--pg-muted)]">
-            Director может создавать/редактировать/деактивировать. Остальные — просмотр.
+            Director может создавать/редактировать/деактивировать. Остальные — только просмотр.
           </div>
         </div>
 
@@ -115,7 +123,7 @@ export default function AdminOrganizationsPage() {
 
       {error && (
         <GlassCard className="mb-6 border border-rose-500/30">
-          <div className="text-sm text-rose-300">{error}</div>
+          <div className="whitespace-pre-wrap text-sm text-rose-300">{error}</div>
         </GlassCard>
       )}
 
@@ -123,7 +131,10 @@ export default function AdminOrganizationsPage() {
         <GlassCard className="mb-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm font-semibold text-[color:var(--pg-text)]">
-              {orgId == null ? "Создать организацию" : `Редактировать организацию #${orgId}`}
+              {orgId == null ? "Создать организацию" : "Редактировать организацию"}
+              {orgId != null && devEnabled && (
+                <span className="ml-2 font-mono text-xs text-[color:var(--pg-muted)]">#{orgId}</span>
+              )}
             </div>
             {orgId != null && (
               <Button variant="secondary" onClick={resetForm}>
@@ -134,7 +145,7 @@ export default function AdminOrganizationsPage() {
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="block">
-              <div className="text-xs text-[color:var(--pg-muted)]">Name</div>
+              <div className="text-xs text-[color:var(--pg-muted)]">Название</div>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -143,7 +154,7 @@ export default function AdminOrganizationsPage() {
             </label>
 
             <label className="block">
-              <div className="text-xs text-[color:var(--pg-muted)]">Slug</div>
+              <div className="text-xs text-[color:var(--pg-muted)]">Слаг</div>
               <input
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
@@ -176,7 +187,7 @@ export default function AdminOrganizationsPage() {
         </div>
 
         {loading ? (
-          <div className="text-sm text-[color:var(--pg-muted)]">Loading…</div>
+          <div className="text-sm text-[color:var(--pg-muted)]">Загрузка…</div>
         ) : items.length === 0 ? (
           <div className="text-sm text-[color:var(--pg-muted)]">Пусто</div>
         ) : (
@@ -184,10 +195,10 @@ export default function AdminOrganizationsPage() {
             <table className="w-full text-sm">
               <thead className="text-left text-[color:var(--pg-muted)]">
                 <tr>
-                  <th className="py-2 pr-4">Name</th>
-                  <th className="py-2 pr-4">Slug</th>
-                  <th className="py-2 pr-4">Active</th>
-                  <th className="py-2 pr-4">Actions</th>
+                  <th className="py-2 pr-4">Название</th>
+                  <th className="py-2 pr-4">Слаг</th>
+                  <th className="py-2 pr-4">Статус</th>
+                  <th className="py-2 pr-4">Действия</th>
                 </tr>
               </thead>
               <tbody className="text-[color:var(--pg-text)]">
@@ -195,7 +206,9 @@ export default function AdminOrganizationsPage() {
                   <tr key={o.id} className="border-t border-[color:var(--pg-border)]">
                     <td className="py-3 pr-4">{o.name}</td>
                     <td className="py-3 pr-4 font-mono">{o.slug}</td>
-                    <td className="py-3 pr-4">{o.is_active ? "yes" : "no"}</td>
+                    <td className="py-3 pr-4">
+                      {o.is_active ? "Активна" : <span className="opacity-70">Отключена</span>}
+                    </td>
                     <td className="py-3 pr-4">
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -209,6 +222,12 @@ export default function AdminOrganizationsPage() {
                           <Button variant="secondary" onClick={() => startEdit(o)}>
                             Редактировать
                           </Button>
+                        )}
+
+                        {devEnabled && (
+                          <span className="self-center font-mono text-xs text-[color:var(--pg-muted)]">
+                            #{o.id}
+                          </span>
                         )}
                       </div>
                     </td>
