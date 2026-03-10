@@ -55,17 +55,36 @@ def _safe_filename(name: str) -> str:
 async def _assert_run_read_access(db: AsyncSession, user: User, run: ChecklistRun) -> None:
     """
     Read rules:
-    - director/auditor_global/super_admin -> can read any run within their allowed orgs
-    - auditor -> can read only their own runs within allowed orgs
+    - admin/auditor_global/super_admin -> can read any run within allowed orgs
+    - ops_director/director -> only completed runs within allowed orgs
+    - auditor -> only own runs within allowed orgs
     """
     allowed_org_ids = set(await get_allowed_organization_ids(db=db, user=user))
     if run.organization_id not in allowed_org_ids:
         raise HTTPException(status_code=403, detail="No access to this organization")
 
-    is_global = await user_has_any_role(db, user, GLOBAL_ROLE_VALUES)
-    if is_global:
+    user_role = str(getattr(user, "role", "") or "")
+
+    # Полный read-access
+    is_full_reader = await user_has_any_role(
+        db,
+        user,
+        {
+            Role.admin.value,
+            Role.auditor_global.value,
+            "super_admin",
+        },
+    )
+    if is_full_reader:
         return
 
+    # Операционный директор / legacy director — только completed
+    if user_role in {Role.ops_director.value, Role.director.value}:
+        if str(getattr(run, "status", "") or "") != "completed":
+            raise HTTPException(status_code=403, detail="Draft runs are not available")
+        return
+
+    # Обычный auditor — только свои
     is_auditor = await user_has_any_role(db, user, {Role.auditor.value})
     if is_auditor and run.auditor_user_id == user.id:
         return
@@ -76,8 +95,8 @@ async def _assert_run_read_access(db: AsyncSession, user: User, run: ChecklistRu
 async def _assert_run_write_access(db: AsyncSession, user: User, run: ChecklistRun) -> None:
     """
     Write rules (answers/attachments):
+    - admin/auditor_global/super_admin -> any run within allowed orgs
     - auditor -> only own runs
-    - auditor_global -> any run within allowed orgs
     - director -> read-only
     """
     if run.status != "draft":
@@ -87,8 +106,12 @@ async def _assert_run_write_access(db: AsyncSession, user: User, run: ChecklistR
     if run.organization_id not in allowed_org_ids:
         raise HTTPException(status_code=403, detail="No access to this organization")
 
-    is_auditor_global = await user_has_any_role(db, user, {Role.auditor_global.value, "super_admin"})
-    if is_auditor_global:
+    is_extended_writer = await user_has_any_role(
+        db,
+        user,
+        {Role.admin.value, Role.auditor_global.value, "super_admin"},
+    )
+    if is_extended_writer:
         return
 
     is_auditor = await user_has_any_role(db, user, {Role.auditor.value})
@@ -101,7 +124,16 @@ async def _assert_run_write_access(db: AsyncSession, user: User, run: ChecklistR
 @router.get("/templates")
 async def list_templates(
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.director)),
+     _user=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
     user: User = Depends(get_current_user),
 ):
     allowed_org_ids = await get_allowed_organization_ids(db=db, user=user)
@@ -136,7 +168,7 @@ async def list_templates(
 async def create_template(
     payload: ChecklistTemplateCreateIn,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor_global, Role.director)),
+    _user=Depends(require_roles(Role.auditor_global, Role.admin, Role.super_admin)),
     user: User = Depends(get_current_user),
 ):
     # helper endpoint до PATCH 5 (импорт Excel)
@@ -195,7 +227,7 @@ async def create_template(
 async def create_run(
     payload: ChecklistRunCreateIn,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
     user: User = Depends(get_current_user),
 ):
     allowed_org_ids = set(await get_allowed_organization_ids(db=db, user=user))
@@ -276,7 +308,16 @@ async def create_run(
 async def get_run(
     run_id: int,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.director)),
+    _user=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
     user: User = Depends(get_current_user),
 ):
     run = (await db.execute(select(ChecklistRun).where(ChecklistRun.id == int(run_id)))).scalar_one_or_none()
@@ -364,12 +405,12 @@ async def get_run(
 
 
 @router.put("/runs/{run_id}/questions/{question_id}/answer")
-async def upsert_answer(
+async def save_answer(
     run_id: int,
     question_id: int,
     payload: ChecklistAnswerUpsertIn,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
     user: User = Depends(get_current_user),
 ):
     run = (await db.execute(select(ChecklistRun).where(ChecklistRun.id == int(run_id)))).scalar_one_or_none()
@@ -428,7 +469,7 @@ async def upload_attachment(
     question_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
     user: User = Depends(get_current_user),
 ):
     run = (await db.execute(select(ChecklistRun).where(ChecklistRun.id == int(run_id)))).scalar_one_or_none()
@@ -491,7 +532,16 @@ async def upload_attachment(
 async def download_attachment(
     attachment_id: int,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.director)),
+    _user=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
     user: User = Depends(get_current_user),
 ):
     att = (await db.execute(select(ChecklistAttachment).where(ChecklistAttachment.id == int(attachment_id)))).scalar_one_or_none()

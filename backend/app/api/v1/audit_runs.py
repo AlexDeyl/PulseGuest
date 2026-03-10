@@ -5,29 +5,30 @@ from io import BytesIO
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import get_db, get_current_user, get_allowed_location_ids, get_allowed_organization_ids
+from app.api.v1.deps import (
+    get_allowed_location_ids,
+    get_allowed_organization_ids,
+    get_current_user,
+    get_db,
+)
+from app.models.audit_checklist import (  # type: ignore
+    ChecklistAnswer,
+    ChecklistAttachment,
+    ChecklistQuestion,
+    ChecklistRun,
+    ChecklistTemplate,
+)
 from app.models.role import Role
 from app.models.user import User
-from app.services.rbac import require_roles
 from app.services.audit_scoring import (
     calculate_run_score,
     resolve_answer_score,
     resolve_question_scoring,
 )
-from app.services.audit_scoring import calculate_run_score
-
-
-from app.models.audit_checklist import (  # type: ignore
-    ChecklistRun,
-    ChecklistTemplate,
-    ChecklistQuestion,
-    ChecklistAnswer,
-    ChecklistAttachment,
-)
-
+from app.services.rbac import require_roles
 
 try:
     from app.models.location import Location  # type: ignore
@@ -69,7 +70,6 @@ def _value_filled(v: Any) -> bool:
         return v.strip() != ""
 
     if isinstance(v, (int, float, bool)):
-        # bool тоже валиден
         return True
 
     if isinstance(v, list):
@@ -78,42 +78,34 @@ def _value_filled(v: Any) -> bool:
     if isinstance(v, dict):
         if not v:
             return False
-        # специальная обработка "choice/text/score" если есть
         if "choice" in v and isinstance(v.get("choice"), str) and v.get("choice", "").strip():
             return True
         if "text" in v and isinstance(v.get("text"), str) and v.get("text", "").strip():
             return True
         if "score" in v and isinstance(v.get("score"), (int, float)):
             return True
-        # иначе — любой непустой элемент
         return any(_value_filled(x) for x in v.values())
 
-    # fallback
     return True
 
 
 def _answer_filled(a: ChecklistAnswer) -> bool:
-    # comment
     c = getattr(a, "comment", None)
     if isinstance(c, str) and c.strip():
         return True
 
-    # value_text
     vt = getattr(a, "value_text", None)
     if isinstance(vt, str) and vt.strip():
         return True
 
-    # value_json
     vj = getattr(a, "value_json", None)
     if _value_filled(vj):
         return True
 
-    # value (на всякий случай)
     v = getattr(a, "value", None)
     if _value_filled(v):
         return True
 
-    # score
     sc = getattr(a, "score", None)
     if isinstance(sc, (int, float)):
         return True
@@ -122,7 +114,9 @@ def _answer_filled(a: ChecklistAnswer) -> bool:
 
 
 async def _ensure_run_access(db: AsyncSession, user: User, run_id: int) -> ChecklistRun:
-    run = (await db.execute(select(ChecklistRun).where(ChecklistRun.id == int(run_id)))).scalar_one_or_none()
+    run = (
+        await db.execute(select(ChecklistRun).where(ChecklistRun.id == int(run_id)))
+    ).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -130,14 +124,18 @@ async def _ensure_run_access(db: AsyncSession, user: User, run_id: int) -> Check
     if int(run.organization_id) not in allowed_orgs:
         raise HTTPException(status_code=403, detail="No access to this organization")
 
-    # если run привязан к location — проверяем allowed_location_ids
     if getattr(run, "location_id", None):
         allowed_locs = set(int(x) for x in (await get_allowed_location_ids(db=db, user=user)))
         if int(run.location_id) not in allowed_locs:
             raise HTTPException(status_code=403, detail="No access to this location")
 
-    # аудиторы видят только свои заполнения (историю)
-    if getattr(run, "auditor_user_id", None) and int(run.auditor_user_id) != int(user.id):
+    user_role = str(getattr(user, "role", "") or "")
+    is_own_only_role = user_role == Role.auditor.value
+
+    if user_role == Role.ops_director.value and str(getattr(run, "status", "") or "") != "completed":
+        raise HTTPException(status_code=403, detail="Draft runs are not available")
+
+    if is_own_only_role and getattr(run, "auditor_user_id", None) and int(run.auditor_user_id) != int(user.id):
         raise HTTPException(status_code=403, detail="Not your run")
 
     return run
@@ -147,7 +145,6 @@ async def _calc_progress(db: AsyncSession, run: ChecklistRun) -> tuple[int, int]
     """
     Возвращаем (answered_count, total_questions) НЕ по количеству строк answers,
     а по факту заполненности (value/comment).
-    Это важно для кнопки "Отправить" и честной валидации.
     """
     qids = (
         await db.execute(
@@ -183,15 +180,19 @@ def _parse_dt_param(raw: str | None) -> datetime | None:
         s = s[:-1] + "+00:00"
     try:
         dt = datetime.fromisoformat(s)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid datetime format, use ISO 8601")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid datetime format, use ISO 8601") from exc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
 
 def _run_ref_dt(run: ChecklistRun) -> datetime | None:
-    return getattr(run, "completed_at", None) or getattr(run, "started_at", None) or getattr(run, "updated_at", None)
+    return (
+        getattr(run, "completed_at", None)
+        or getattr(run, "started_at", None)
+        or getattr(run, "updated_at", None)
+    )
 
 
 def _score_percent_value(score_obj: dict[str, Any] | None) -> float | None:
@@ -226,7 +227,9 @@ def _trend_period_label(dt: datetime, bucket: str) -> str:
     return dt.strftime("%d.%m")
 
 
-def _choose_trend_bucket(dt_from: datetime | None, dt_to: datetime | None, completed_rows_count: int) -> str:
+def _choose_trend_bucket(
+    dt_from: datetime | None, dt_to: datetime | None, completed_rows_count: int
+) -> str:
     if dt_from and dt_to:
         if (dt_to - dt_from).days > 31:
             return "week"
@@ -242,30 +245,39 @@ async def list_my_runs(
     status: str | None = Query(default=None, description="draft|completed"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
 ):
     allowed_orgs = set(int(x) for x in (await get_allowed_organization_ids(db=db, user=user)))
     if not allowed_orgs:
         return []
 
-    # базовый селект
     cols: list[Any] = [ChecklistRun, ChecklistTemplate.name]
 
-    # опционально добавим location/org имена, чтобы история выглядела по-человечески
-    if Location is not None:
+    has_location = Location is not None
+    has_organization = Organization is not None
+
+    if has_location:
         cols.append(Location.name.label("location_name"))
-    if Organization is not None:
+    if has_organization:
         cols.append(Organization.name.label("organization_name"))
 
-    q = (
-        select(*cols)
-        .join(ChecklistTemplate, ChecklistTemplate.id == ChecklistRun.template_id)
-        .where(ChecklistRun.auditor_user_id == int(user.id))
-    )
+    q = select(*cols).join(ChecklistTemplate, ChecklistTemplate.id == ChecklistRun.template_id)
 
-    if Location is not None:
+    if str(getattr(user, "role", "") or "") == Role.auditor.value:
+        q = q.where(ChecklistRun.auditor_user_id == int(user.id))
+
+    if has_location:
         q = q.outerjoin(Location, Location.id == ChecklistRun.location_id)
-    if Organization is not None:
+    if has_organization:
         q = q.outerjoin(Organization, Organization.id == ChecklistRun.organization_id)
 
     if organization_id is not None:
@@ -275,27 +287,32 @@ async def list_my_runs(
     else:
         q = q.where(ChecklistRun.organization_id.in_(list(allowed_orgs)))
 
+    user_role = str(getattr(user, "role", "") or "")
+
     if status:
         st = str(status).strip().lower()
         if st not in {"draft", "completed"}:
             raise HTTPException(status_code=400, detail="Invalid status")
         q = q.where(ChecklistRun.status == st)
 
-    # FIX: у ChecklistRun нет created_at → сортируем по updated_at
+    # ops_director в истории видит только completed
+    if user_role == Role.ops_director.value:
+        q = q.where(ChecklistRun.status == "completed")
+
     q = q.order_by(ChecklistRun.completed_at.desc().nullslast(), ChecklistRun.updated_at.desc())
 
     rows = (await db.execute(q)).all()
 
     out: list[dict[str, Any]] = []
     for row in rows:
-        # row может быть:
-        # (run, template_name)
-        # (run, template_name, location_name)
-        # (run, template_name, location_name, organization_name)
         run = row[0]
         template_name = row[1]
-        location_name = row[2] if len(row) >= 3 else None
-        organization_name = row[3] if len(row) >= 4 else None
+
+        idx = 2
+        location_name = row[idx] if has_location else None
+        if has_location:
+            idx += 1
+        organization_name = row[idx] if has_organization else None
 
         answered, total = await _calc_progress(db=db, run=run)
         created_dt = getattr(run, "created_at", None) or getattr(run, "updated_at", None)
@@ -326,7 +343,6 @@ async def list_my_runs(
                 "template_id": int(run.template_id),
                 "template_name": str(template_name),
                 "status": str(run.status),
-                # FIX: всегда отдаём created_at (fallback на updated_at), чтобы фронт мог показывать дату
                 "created_at": _dt_iso(created_dt),
                 "completed_at": _dt_iso(getattr(run, "completed_at", None)),
                 "answered_count": answered,
@@ -345,417 +361,449 @@ async def get_dashboard_summary(
     organization_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.auditor, Role.auditor_global, Role.director)),
+    _=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
 ):
-    """
-    Safe analytics endpoint for auditor dashboard.
-
-    Notes / assumptions:
-    - scope is restricted by allowed_org_ids + allowed_location_ids
-    - runs without location_id are allowed by organization scope
-    - period filter uses completed_at for completed runs, otherwise started_at
-    - "problem_completed_runs" => score_percent < 70
-    """
-    allowed_orgs = set(int(x) for x in (await get_allowed_organization_ids(db=db, user=user)))
-    if not allowed_orgs:
-        return {
-            "period": {"date_from": date_from, "date_to": date_to},
-            "total_runs": 0,
-            "completed_runs": 0,
-            "draft_runs": 0,
-            "avg_score_percent": None,
-            "avg_score_sum": None,
-            "avg_score_max": None,
-            "problem_completed_runs": 0,
-            "by_organization": [],
-            "by_group": [],
-            "best_locations": [],
-            "worst_locations": [],
-            "worst_questions": [],
-            "recent_completed": [],
-        }
-
-    if organization_id is not None and int(organization_id) not in allowed_orgs:
-        raise HTTPException(status_code=403, detail="No access to this organization")
-
     dt_from = _parse_dt_param(date_from)
     dt_to = _parse_dt_param(date_to)
 
+    allowed_orgs = set(int(x) for x in (await get_allowed_organization_ids(db=db, user=user)))
     allowed_locs = set(int(x) for x in (await get_allowed_location_ids(db=db, user=user)))
 
-    cols: list[Any] = [
-        ChecklistRun,
-        ChecklistTemplate.name.label("template_name"),
-        ChecklistTemplate.location_type.label("template_location_type"),
-    ]
-
-    if Location is not None:
-        cols.append(Location.name.label("location_name"))
-        cols.append(Location.type.label("location_type"))
-    if Organization is not None:
-        cols.append(Organization.name.label("organization_name"))
-
-    q = (
-        select(*cols)
-        .join(ChecklistTemplate, ChecklistTemplate.id == ChecklistRun.template_id)
-    )
-
-    if Location is not None:
-        q = q.outerjoin(Location, Location.id == ChecklistRun.location_id)
-    if Organization is not None:
-        q = q.outerjoin(Organization, Organization.id == ChecklistRun.organization_id)
-
     if organization_id is not None:
-        q = q.where(ChecklistRun.organization_id == int(organization_id))
-    else:
-        q = q.where(ChecklistRun.organization_id.in_(list(allowed_orgs)))
+        if int(organization_id) not in allowed_orgs:
+            raise HTTPException(status_code=403, detail="No access to this organization")
+        allowed_orgs = {int(organization_id)}
 
-    rows = (await db.execute(q.order_by(ChecklistRun.completed_at.desc().nullslast(), ChecklistRun.updated_at.desc()))).all()
+    empty_response = {
+        "period": {
+            "date_from": _dt_iso(dt_from),
+            "date_to": _dt_iso(dt_to),
+        },
+        "total_runs": 0,
+        "completed_runs": 0,
+        "draft_runs": 0,
+        "avg_score_percent": None,
+        "avg_score_sum": None,
+        "avg_score_max": None,
+        "problem_completed_runs": 0,
+        "by_organization": [],
+        "by_group": [],
+        "best_locations": [],
+        "worst_locations": [],
+        "worst_questions": [],
+        "recent_completed": [],
+        "trends": [],
+    }
 
-    filtered_rows: list[Any] = []
-    for row in rows:
-        run = row[0]
+    if not allowed_orgs:
+        return empty_response
 
-        if getattr(run, "location_id", None) is not None:
-            if int(run.location_id) not in allowed_locs:
-                continue
+    q = select(ChecklistRun).where(ChecklistRun.organization_id.in_(list(allowed_orgs)))
+    rows = (await db.execute(q)).scalars().all()
+
+    visible_runs: list[ChecklistRun] = []
+    for run in rows:
+        loc_id = getattr(run, "location_id", None)
+        if loc_id is not None and allowed_locs and int(loc_id) not in allowed_locs:
+            continue
 
         ref_dt = _run_ref_dt(run)
-        if dt_from and (ref_dt is None or ref_dt < dt_from):
+        if dt_from and ref_dt and ref_dt < dt_from:
             continue
-        if dt_to and (ref_dt is None or ref_dt > dt_to):
+        if dt_to and ref_dt and ref_dt > dt_to:
             continue
 
-        filtered_rows.append(row)
+        user_role = str(getattr(user, "role", "") or "")
 
-    if not filtered_rows:
-        return {
-            "period": {"date_from": date_from, "date_to": date_to},
-            "total_runs": 0,
-            "completed_runs": 0,
-            "draft_runs": 0,
-            "avg_score_percent": None,
-            "avg_score_sum": None,
-            "avg_score_max": None,
-            "problem_completed_runs": 0,
-            "by_organization": [],
-            "by_group": [],
-            "best_locations": [],
-            "worst_locations": [],
-            "worst_questions": [],
-            "recent_completed": [],
-        }
+        if user_role == Role.auditor.value:
+            if int(getattr(run, "auditor_user_id", 0) or 0) != int(user.id):
+                continue
 
-    completed_run_ids = [int(row[0].id) for row in filtered_rows if str(row[0].status) == "completed"]
-    template_ids = sorted({int(row[0].template_id) for row in filtered_rows})
+        if user_role == Role.ops_director.value and str(getattr(run, "status", "") or "") != "completed":
+            continue
 
-    questions_rows = (
+        visible_runs.append(run)
+
+    if not visible_runs:
+        return empty_response
+
+    run_ids = [int(r.id) for r in visible_runs]
+    template_ids = sorted({int(r.template_id) for r in visible_runs})
+    org_ids = sorted({int(r.organization_id) for r in visible_runs})
+    loc_ids = sorted({int(r.location_id) for r in visible_runs if getattr(r, "location_id", None)})
+
+    templates = (
+        await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id.in_(template_ids)))
+    ).scalars().all()
+    tpl_by_id = {int(t.id): t for t in templates}
+
+    questions = (
         await db.execute(
             select(ChecklistQuestion)
             .where(ChecklistQuestion.template_id.in_(template_ids))
-            .order_by(ChecklistQuestion.template_id.asc(), ChecklistQuestion.order.asc(), ChecklistQuestion.id.asc())
+            .order_by(ChecklistQuestion.order.asc(), ChecklistQuestion.id.asc())
         )
     ).scalars().all()
+    qs_by_template: dict[int, list[ChecklistQuestion]] = {}
+    for qrow in questions:
+        tid = int(qrow.template_id)
+        qs_by_template.setdefault(tid, []).append(qrow)
 
-    questions_by_template: dict[int, list[ChecklistQuestion]] = {}
-    for qrow in questions_rows:
-        questions_by_template.setdefault(int(qrow.template_id), []).append(qrow)
-
+    answers = (
+        await db.execute(select(ChecklistAnswer).where(ChecklistAnswer.run_id.in_(run_ids)))
+    ).scalars().all()
     answers_by_run: dict[int, list[ChecklistAnswer]] = {}
-    if completed_run_ids:
-        answer_rows = (
-            await db.execute(
-                select(ChecklistAnswer).where(ChecklistAnswer.run_id.in_(completed_run_ids))
-            )
+    for ans in answers:
+        answers_by_run.setdefault(int(ans.run_id), []).append(ans)
+
+    org_by_id: dict[int, Any] = {}
+    if Organization is not None and org_ids:
+        org_rows = (
+            await db.execute(select(Organization).where(Organization.id.in_(org_ids)))
         ).scalars().all()
-        for a in answer_rows:
-            answers_by_run.setdefault(int(a.run_id), []).append(a)
+        org_by_id = {int(o.id): o for o in org_rows}
 
-    run_scores: dict[int, dict[str, Any]] = {}
-    for row in filtered_rows:
-        run = row[0]
-        if str(run.status) != "completed":
-            continue
-        qs = questions_by_template.get(int(run.template_id), [])
-        ans = answers_by_run.get(int(run.id), [])
-        run_scores[int(run.id)] = calculate_run_score(questions=qs, answers=ans)
+    loc_by_id: dict[int, Any] = {}
+    if Location is not None and loc_ids:
+        loc_rows = (
+            await db.execute(select(Location).where(Location.id.in_(loc_ids)))
+        ).scalars().all()
+        loc_by_id = {int(l.id): l for l in loc_rows}
 
-    total_runs = len(filtered_rows)
-    completed_rows = [row for row in filtered_rows if str(row[0].status) == "completed"]
-    draft_rows = [row for row in filtered_rows if str(row[0].status) != "completed"]
+    total_runs = len(visible_runs)
+    completed_rows = [r for r in visible_runs if str(r.status) == "completed"]
+    draft_rows = [r for r in visible_runs if str(r.status) != "completed"]
 
-    avg_score_percent = _avg(
-        [
-            float(s["score_percent"])
-            for s in run_scores.values()
-            if s.get("score_percent") is not None
-        ]
-    )
-    avg_score_sum = _avg([float(s["score_sum"]) for s in run_scores.values()])
-    avg_score_max = _avg([float(s["score_max"]) for s in run_scores.values()])
-
-    problem_completed_runs = sum(
-        1
-        for s in run_scores.values()
-        if s.get("score_percent") is not None and float(s["score_percent"]) < 70.0
-    )
+    completed_items: list[dict[str, Any]] = []
 
     by_org_acc: dict[int, dict[str, Any]] = {}
     by_group_acc: dict[str, dict[str, Any]] = {}
     by_loc_acc: dict[int, dict[str, Any]] = {}
     worst_q_acc: dict[int, dict[str, Any]] = {}
 
-    for row in completed_rows:
-        run = row[0]
-        m = row._mapping
-        score_obj = run_scores.get(int(run.id))
-        score_percent = _score_percent_value(score_obj)
+    all_score_percents: list[float] = []
+    all_score_sums: list[float] = []
+    all_score_maxes: list[float] = []
+
+    for run in completed_rows:
+        tid = int(run.template_id)
+        rid = int(run.id)
+        questions_for_run = qs_by_template.get(tid, [])
+        answers_for_run = answers_by_run.get(rid, [])
+        score = calculate_run_score(questions=questions_for_run, answers=answers_for_run)
+
+        score_percent = _score_percent_value(score)
+        score_sum = score.get("score_sum")
+        score_max = score.get("score_max")
+
+        if score_percent is not None:
+            all_score_percents.append(float(score_percent))
+        if isinstance(score_sum, (int, float)):
+            all_score_sums.append(float(score_sum))
+        if isinstance(score_max, (int, float)):
+            all_score_maxes.append(float(score_max))
 
         org_id = int(run.organization_id)
-        org_name = m.get("organization_name") or f"Организация #{org_id}"
+        org_obj = org_by_id.get(org_id)
+        org_name = str(getattr(org_obj, "name", "") or f"Организация #{org_id}")
 
-        org_item = by_org_acc.setdefault(
+        org_acc = by_org_acc.setdefault(
             org_id,
             {
                 "organization_id": org_id,
-                "organization_name": str(org_name),
+                "organization_name": org_name,
                 "completed_runs": 0,
-                "score_percent_values": [],
-                "score_sum_values": [],
-                "score_max_values": [],
+                "_score_percents": [],
+                "_score_sums": [],
+                "_score_maxes": [],
             },
         )
-        org_item["completed_runs"] += 1
+        org_acc["completed_runs"] += 1
         if score_percent is not None:
-            org_item["score_percent_values"].append(score_percent)
-        if score_obj is not None:
-            org_item["score_sum_values"].append(float(score_obj["score_sum"]))
-            org_item["score_max_values"].append(float(score_obj["score_max"]))
+            org_acc["_score_percents"].append(float(score_percent))
+        if isinstance(score_sum, (int, float)):
+            org_acc["_score_sums"].append(float(score_sum))
+        if isinstance(score_max, (int, float)):
+            org_acc["_score_maxes"].append(float(score_max))
 
-        group_key = str(
-            m.get("template_location_type")
-            or m.get("location_type")
-            or "organization"
-        )
-        grp_item = by_group_acc.setdefault(
+        loc_id = getattr(run, "location_id", None)
+        loc_obj = loc_by_id.get(int(loc_id)) if loc_id else None
+        loc_name = str(getattr(loc_obj, "name", "") or (f"Локация #{loc_id}" if loc_id else "Без локации"))
+        group_key = str(getattr(loc_obj, "type", "") or "other")
+
+        grp_acc = by_group_acc.setdefault(
             group_key,
             {
                 "group_key": group_key,
                 "completed_runs": 0,
-                "score_percent_values": [],
-                "score_sum_values": [],
-                "score_max_values": [],
+                "_score_percents": [],
+                "_score_sums": [],
+                "_score_maxes": [],
             },
         )
-        grp_item["completed_runs"] += 1
+        grp_acc["completed_runs"] += 1
         if score_percent is not None:
-            grp_item["score_percent_values"].append(score_percent)
-        if score_obj is not None:
-            grp_item["score_sum_values"].append(float(score_obj["score_sum"]))
-            grp_item["score_max_values"].append(float(score_obj["score_max"]))
+            grp_acc["_score_percents"].append(float(score_percent))
+        if isinstance(score_sum, (int, float)):
+            grp_acc["_score_sums"].append(float(score_sum))
+        if isinstance(score_max, (int, float)):
+            grp_acc["_score_maxes"].append(float(score_max))
 
-        if getattr(run, "location_id", None):
-            loc_id = int(run.location_id)
-            loc_name = m.get("location_name") or f"Локация #{loc_id}"
-            loc_item = by_loc_acc.setdefault(
-                loc_id,
+        if loc_id is not None:
+            loc_key = int(loc_id)
+            loc_acc = by_loc_acc.setdefault(
+                loc_key,
                 {
-                    "location_id": loc_id,
-                    "location_name": str(loc_name),
+                    "location_id": int(loc_id),
+                    "location_name": loc_name,
                     "organization_id": org_id,
-                    "organization_name": str(org_name),
+                    "organization_name": org_name,
                     "completed_runs": 0,
-                    "score_percent_values": [],
+                    "_score_percents": [],
                 },
             )
-            loc_item["completed_runs"] += 1
+            loc_acc["completed_runs"] += 1
             if score_percent is not None:
-                loc_item["score_percent_values"].append(score_percent)
+                loc_acc["_score_percents"].append(float(score_percent))
 
-        qs = questions_by_template.get(int(run.template_id), [])
-        ans_rows = answers_by_run.get(int(run.id), [])
-        ans_by_qid = {int(a.question_id): a for a in ans_rows}
-
-        for qrow in qs:
-            scoring = resolve_question_scoring(qrow)
-            if scoring is None:
+        ans_map = {int(a.question_id): a for a in answers_for_run}
+        for qrow in questions_for_run:
+            qscore_meta = resolve_question_scoring(qrow)
+            if not qscore_meta.get("scoreable"):
                 continue
 
-            actual_score = resolve_answer_score(qrow, ans_by_qid.get(int(qrow.id)))
-            if actual_score is None:
+            ans = ans_map.get(int(qrow.id))
+            if ans is None:
                 continue
 
-            max_score = float(scoring.get("max_score") or 0.0)
+            resolved = resolve_answer_score(qrow, getattr(ans, "value", None))
+            if resolved.get("excluded"):
+                continue
 
-            item = worst_q_acc.setdefault(
+            value = resolved.get("score")
+            if value is None:
+                continue
+
+            qacc = worst_q_acc.setdefault(
                 int(qrow.id),
                 {
                     "question_id": int(qrow.id),
                     "template_id": int(qrow.template_id),
-                    "template_name": str(m.get("template_name") or ""),
+                    "template_name": str(
+                        getattr(tpl_by_id.get(int(qrow.template_id)), "name", "")
+                        or f"Template #{int(qrow.template_id)}"
+                    ),
                     "section": str(getattr(qrow, "section", "") or ""),
                     "text": str(getattr(qrow, "text", "") or ""),
                     "answers_count": 0,
                     "zero_count": 0,
                     "low_count": 0,
-                    "score_values": [],
+                    "_scores": [],
                 },
             )
-            item["answers_count"] += 1
-            item["score_values"].append(float(actual_score))
-            if float(actual_score) <= 0:
-                item["zero_count"] += 1
-            if max_score > 0 and float(actual_score) < max_score:
-                item["low_count"] += 1
+
+            qacc["answers_count"] += 1
+            try:
+                f_value = float(value)
+            except Exception:
+                continue
+
+            qacc["_scores"].append(f_value)
+            if f_value <= 0:
+                qacc["zero_count"] += 1
+            if f_value < 1:
+                qacc["low_count"] += 1
+
+        completed_items.append(
+            {
+                "id": rid,
+                "organization_id": org_id,
+                "organization_name": org_name,
+                "location_id": int(loc_id) if loc_id is not None else None,
+                "location_name": loc_name if loc_id is not None else None,
+                "template_id": tid,
+                "template_name": str(getattr(tpl_by_id.get(tid), "name", "") or f"Template #{tid}"),
+                "completed_at": _dt_iso(getattr(run, "completed_at", None)),
+                "score": score,
+                "_score_percent": score_percent,
+                "_ref_dt": _run_ref_dt(run),
+            }
+        )
+
+    avg_score_percent = _avg(all_score_percents)
+    avg_score_sum = _avg(all_score_sums)
+    avg_score_max = _avg(all_score_maxes)
+
+    problem_completed_runs = 0
+    for item in completed_items:
+        sp = item.get("_score_percent")
+        if sp is not None and float(sp) < 80.0:
+            problem_completed_runs += 1
 
     by_organization = []
-    for item in by_org_acc.values():
+    for _, acc in by_org_acc.items():
         by_organization.append(
             {
-                "organization_id": item["organization_id"],
-                "organization_name": item["organization_name"],
-                "completed_runs": item["completed_runs"],
-                "avg_score_percent": _avg(item["score_percent_values"]),
-                "avg_score_sum": _avg(item["score_sum_values"]),
-                "avg_score_max": _avg(item["score_max_values"]),
+                "organization_id": acc["organization_id"],
+                "organization_name": acc["organization_name"],
+                "completed_runs": acc["completed_runs"],
+                "avg_score_percent": _avg(acc["_score_percents"]),
+                "avg_score_sum": _avg(acc["_score_sums"]),
+                "avg_score_max": _avg(acc["_score_maxes"]),
             }
         )
-    by_organization.sort(key=lambda x: ((x["avg_score_percent"] is None), -(x["avg_score_percent"] or 0), -x["completed_runs"]))
+    by_organization.sort(
+        key=lambda x: (
+            -(x["completed_runs"] or 0),
+            -1 if x["avg_score_percent"] is None else -(x["avg_score_percent"] or 0),
+        )
+    )
 
     by_group = []
-    for item in by_group_acc.values():
+    for _, acc in by_group_acc.items():
         by_group.append(
             {
-                "group_key": item["group_key"],
-                "completed_runs": item["completed_runs"],
-                "avg_score_percent": _avg(item["score_percent_values"]),
-                "avg_score_sum": _avg(item["score_sum_values"]),
-                "avg_score_max": _avg(item["score_max_values"]),
+                "group_key": acc["group_key"],
+                "completed_runs": acc["completed_runs"],
+                "avg_score_percent": _avg(acc["_score_percents"]),
+                "avg_score_sum": _avg(acc["_score_sums"]),
+                "avg_score_max": _avg(acc["_score_maxes"]),
             }
         )
-    by_group.sort(key=lambda x: ((x["avg_score_percent"] is None), -(x["avg_score_percent"] or 0), -x["completed_runs"]))
+    by_group.sort(
+        key=lambda x: (
+            -(x["completed_runs"] or 0),
+            -1 if x["avg_score_percent"] is None else -(x["avg_score_percent"] or 0),
+        )
+    )
 
-    all_locations = []
-    for item in by_loc_acc.values():
-        all_locations.append(
+    locations_ranked = []
+    for _, acc in by_loc_acc.items():
+        locations_ranked.append(
             {
-                "location_id": item["location_id"],
-                "location_name": item["location_name"],
-                "organization_id": item["organization_id"],
-                "organization_name": item["organization_name"],
-                "completed_runs": item["completed_runs"],
-                "avg_score_percent": _avg(item["score_percent_values"]),
+                "location_id": acc["location_id"],
+                "location_name": acc["location_name"],
+                "organization_id": acc["organization_id"],
+                "organization_name": acc["organization_name"],
+                "completed_runs": acc["completed_runs"],
+                "avg_score_percent": _avg(acc["_score_percents"]),
             }
         )
 
-    scored_locations = [x for x in all_locations if x["avg_score_percent"] is not None]
     best_locations = sorted(
-        scored_locations,
-        key=lambda x: (-(x["avg_score_percent"] or 0), -x["completed_runs"], x["location_name"])
+        [x for x in locations_ranked if x["avg_score_percent"] is not None],
+        key=lambda x: (-(x["avg_score_percent"] or 0), -(x["completed_runs"] or 0)),
     )[:5]
+
     worst_locations = sorted(
-        scored_locations,
-        key=lambda x: ((x["avg_score_percent"] or 0), -x["completed_runs"], x["location_name"])
+        [x for x in locations_ranked if x["avg_score_percent"] is not None],
+        key=lambda x: ((x["avg_score_percent"] or 0), -(x["completed_runs"] or 0)),
     )[:5]
 
     worst_questions = []
-    for item in worst_q_acc.values():
-        answers_count = int(item["answers_count"])
-        low_rate = round((item["low_count"] / answers_count) * 100.0, 2) if answers_count > 0 else None
+    for _, acc in worst_q_acc.items():
+        scores = acc["_scores"]
+        answers_count = int(acc["answers_count"])
+        low_count = int(acc["low_count"])
         worst_questions.append(
             {
-                "question_id": item["question_id"],
-                "template_id": item["template_id"],
-                "template_name": item["template_name"],
-                "section": item["section"],
-                "text": item["text"],
+                "question_id": acc["question_id"],
+                "template_id": acc["template_id"],
+                "template_name": acc["template_name"],
+                "section": acc["section"],
+                "text": acc["text"],
                 "answers_count": answers_count,
-                "zero_count": int(item["zero_count"]),
-                "low_count": int(item["low_count"]),
-                "low_rate": low_rate,
-                "avg_score": _avg(item["score_values"]),
+                "zero_count": int(acc["zero_count"]),
+                "low_count": low_count,
+                "low_rate": round((low_count / answers_count) * 100, 2) if answers_count > 0 else None,
+                "avg_score": _avg(scores),
             }
         )
 
     worst_questions.sort(
         key=lambda x: (
-            -(x["zero_count"]),
-            -((x["low_rate"] or 0)),
-            -(x["answers_count"]),
-            x["text"],
+            -1 if x["low_rate"] is None else -(x["low_rate"] or 0),
+            -1 if x["answers_count"] is None else -(x["answers_count"] or 0),
         )
     )
     worst_questions = worst_questions[:10]
 
-    recent_completed = []
-    for row in sorted(
-        completed_rows,
-        key=lambda r: (
-            r[0].completed_at or r[0].updated_at or r[0].started_at
-        ),
+    recent_completed = sorted(
+        completed_items,
+        key=lambda x: x["_ref_dt"] or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
-    )[:10]:
-        run = row[0]
-        m = row._mapping
-        recent_completed.append(
-            {
-                "id": int(run.id),
-                "organization_id": int(run.organization_id),
-                "organization_name": str(m.get("organization_name") or f"Организация #{int(run.organization_id)}"),
-                "location_id": int(run.location_id) if getattr(run, "location_id", None) else None,
-                "location_name": str(m.get("location_name")) if m.get("location_name") else None,
-                "template_id": int(run.template_id),
-                "template_name": str(m.get("template_name") or ""),
-                "completed_at": _dt_iso(getattr(run, "completed_at", None)),
-                "score": run_scores.get(int(run.id)),
-            }
-        )
+    )[:10]
+    recent_completed = [
+        {
+            "id": item["id"],
+            "organization_id": item["organization_id"],
+            "organization_name": item["organization_name"],
+            "location_id": item["location_id"],
+            "location_name": item["location_name"],
+            "template_id": item["template_id"],
+            "template_name": item["template_name"],
+            "completed_at": item["completed_at"],
+            "score": item["score"],
+        }
+        for item in recent_completed
+    ]
 
-    trend_bucket = _choose_trend_bucket(dt_from, dt_to, len(completed_rows))
-    trends_acc: dict[str, dict[str, Any]] = {}
+    bucket = _choose_trend_bucket(dt_from, dt_to, len(completed_items))
+    trend_acc: dict[str, dict[str, Any]] = {}
 
-    for row in completed_rows:
-        run = row[0]
-        score_obj = run_scores.get(int(run.id))
-        score_percent = _score_percent_value(score_obj)
-        ref_dt = getattr(run, "completed_at", None) or getattr(run, "updated_at", None) or getattr(run, "started_at", None)
-        if ref_dt is None:
+    for item in completed_items:
+        ref_dt = item.get("_ref_dt")
+        if not ref_dt:
             continue
 
-        period_key = _trend_period_key(ref_dt, trend_bucket)
-        item = trends_acc.setdefault(
+        period_key = _trend_period_key(ref_dt, bucket)
+        entry = trend_acc.setdefault(
             period_key,
             {
                 "period_key": period_key,
-                "label": _trend_period_label(ref_dt, trend_bucket),
-                "bucket": trend_bucket,
+                "label": _trend_period_label(ref_dt, bucket),
+                "bucket": bucket,
                 "completed_runs": 0,
                 "problem_completed_runs": 0,
-                "score_percent_values": [],
+                "_score_percents": [],
                 "_sort_dt": ref_dt,
             },
         )
-        item["completed_runs"] += 1
-        if score_percent is not None:
-            item["score_percent_values"].append(float(score_percent))
-            if float(score_percent) < 70.0:
-                item["problem_completed_runs"] += 1
+
+        entry["completed_runs"] += 1
+        sp = item.get("_score_percent")
+        if sp is not None:
+            entry["_score_percents"].append(float(sp))
+            if float(sp) < 80.0:
+                entry["problem_completed_runs"] += 1
 
     trends = []
-    for item in sorted(trends_acc.values(), key=lambda x: x["_sort_dt"]):
+    for _, acc in sorted(trend_acc.items(), key=lambda kv: kv[1]["_sort_dt"]):
         trends.append(
             {
-                "period_key": item["period_key"],
-                "label": item["label"],
-                "bucket": item["bucket"],
-                "completed_runs": int(item["completed_runs"]),
-                "problem_completed_runs": int(item["problem_completed_runs"]),
-                "avg_score_percent": _avg(item["score_percent_values"]),
+                "period_key": acc["period_key"],
+                "label": acc["label"],
+                "bucket": acc["bucket"],
+                "completed_runs": acc["completed_runs"],
+                "problem_completed_runs": acc["problem_completed_runs"],
+                "avg_score_percent": _avg(acc["_score_percents"]),
             }
         )
 
     return {
-        "period": {"date_from": date_from, "date_to": date_to},
+        "period": {
+            "date_from": _dt_iso(dt_from),
+            "date_to": _dt_iso(dt_to),
+        },
         "total_runs": int(total_runs),
         "completed_runs": int(len(completed_rows)),
         "draft_runs": int(len(draft_rows)),
@@ -778,7 +826,7 @@ async def complete_run(
     run_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
 ):
     run = await _ensure_run_access(db=db, user=user, run_id=int(run_id))
 
@@ -790,13 +838,17 @@ async def complete_run(
     if missing > 0:
         raise HTTPException(
             status_code=400,
-            detail={"message": "Not all answers filled", "missing": missing, "answered": answered, "total": total},
+            detail={
+                "message": "Not all answers filled",
+                "missing": missing,
+                "answered": answered,
+                "total": total,
+            },
         )
 
     run.status = "completed"
     run.completed_at = _now_utc()
 
-    # на всякий случай "touch" updated_at, если у тебя нет автотрекинга
     if hasattr(run, "updated_at"):
         run.updated_at = _now_utc()  # type: ignore
 
@@ -810,7 +862,16 @@ async def run_pdf(
     run_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
 ):
     """
     Минимально удобный PDF-отчёт (таблица):
@@ -820,10 +881,10 @@ async def run_pdf(
     if str(run.status) != "completed":
         raise HTTPException(status_code=400, detail="Run is not completed")
 
-    # тянем шаблон
-    tmpl = (await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id == int(run.template_id)))).scalar_one()
+    tmpl = (
+        await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id == int(run.template_id)))
+    ).scalar_one()
 
-    # метаданные (организация/локация если есть)
     org_name = None
     if Organization is not None:
         org_name = (
@@ -836,7 +897,6 @@ async def run_pdf(
             await db.execute(select(Location.name).where(Location.id == int(run.location_id)))
         ).scalar_one_or_none()
 
-    # вопросы
     qs = (
         await db.execute(
             select(ChecklistQuestion)
@@ -845,13 +905,11 @@ async def run_pdf(
         )
     ).scalars().all()
 
-    # ответы мапой
     ans_rows = (
         await db.execute(select(ChecklistAnswer).where(ChecklistAnswer.run_id == int(run.id)))
     ).scalars().all()
     ans_by_q = {int(a.question_id): a for a in ans_rows}
 
-    # вложения count по question_id
     att_counts_rows = (
         await db.execute(
             select(ChecklistAttachment.question_id, func.count(ChecklistAttachment.id))
@@ -861,12 +919,11 @@ async def run_pdf(
     ).all()
     att_count = {int(qid): int(cnt) for qid, cnt in att_counts_rows}
 
-    # --- PDF ---
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
@@ -959,47 +1016,53 @@ async def get_run_detail(
     run_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.auditor, Role.auditor_global)),
+    _=Depends(
+        require_roles(
+            Role.auditor,
+            Role.auditor_global,
+            Role.ops_director,
+            Role.director,
+            Role.admin,
+            Role.super_admin,
+        )
+    ),
 ):
     run = await _ensure_run_access(db=db, user=user, run_id=int(run_id))
 
     template = (
-        await db.execute(
-            select(ChecklistTemplate).where(ChecklistTemplate.id == run.template_id)
-        )
+        await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id == run.template_id))
     ).scalar_one()
 
     questions = (
         await db.execute(
             select(ChecklistQuestion)
             .where(ChecklistQuestion.template_id == run.template_id)
-            .order_by(ChecklistQuestion.order.asc())
+            .order_by(ChecklistQuestion.order.asc(), ChecklistQuestion.id.asc())
         )
     ).scalars().all()
 
     answers = (
-        await db.execute(
-            select(ChecklistAnswer).where(ChecklistAnswer.run_id == run.id)
-        )
+        await db.execute(select(ChecklistAnswer).where(ChecklistAnswer.run_id == run.id))
     ).scalars().all()
-
     answers_by_q = {a.question_id: a for a in answers}
 
     attachments = (
-        await db.execute(
-            select(ChecklistAttachment).where(ChecklistAttachment.run_id == run.id)
-        )
+        await db.execute(select(ChecklistAttachment).where(ChecklistAttachment.run_id == run.id))
     ).scalars().all()
 
-    att_by_q: dict[int, list] = {}
+    answered_count, total_questions = await _calc_progress(db=db, run=run)
+
+    run_score = None
+    if str(run.status) == "completed":
+        run_score = calculate_run_score(questions=questions, answers=answers)
+
+    att_by_q: dict[int, list[Any]] = {}
     for a in attachments:
         att_by_q.setdefault(a.question_id, []).append(a)
 
     out_questions = []
-
     for q in questions:
         ans = answers_by_q.get(q.id)
-
         out_questions.append(
             {
                 "id": q.id,
@@ -1012,8 +1075,8 @@ async def get_run_detail(
                 "allow_photos": q.allow_photos,
                 "options": q.options,
                 "answer": {
-                    "value": getattr(ans, "value_json", None),
-                    "comment": getattr(ans, "comment", None),
+                    "value": getattr(ans, "value_json", None) if ans is not None else None,
+                    "comment": getattr(ans, "comment", None) if ans is not None else None,
                 }
                 if ans
                 else None,
@@ -1030,11 +1093,26 @@ async def get_run_detail(
 
     return {
         "id": run.id,
+        "template_id": run.template_id,
+        "organization_id": run.organization_id,
+        "location_id": run.location_id,
+        "auditor_user_id": run.auditor_user_id,
         "status": run.status,
-        "completed_at": run.completed_at,
+        "started_at": _dt_iso(getattr(run, "started_at", None)),
+        "updated_at": _dt_iso(getattr(run, "updated_at", None)),
+        "completed_at": _dt_iso(getattr(run, "completed_at", None)),
+        "answered_count": int(answered_count),
+        "total_questions": int(total_questions),
         "template": {
             "id": template.id,
+            "organization_id": template.organization_id,
             "name": template.name,
+            "description": getattr(template, "description", "") or "",
+            "scope": getattr(template, "scope", None),
+            "location_type": getattr(template, "location_type", None),
+            "version": getattr(template, "version", None),
+            "is_active": getattr(template, "is_active", None),
         },
         "questions": out_questions,
+        **({"score": run_score} if run_score is not None else {}),
     }

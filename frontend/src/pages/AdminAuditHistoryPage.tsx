@@ -45,6 +45,11 @@ export default function AdminAuditHistoryPage() {
 
   const allowedLocations: LocShort[] = (me?.allowed_locations ?? []) as any;
 
+  const roleValues = Array.isArray((me as any)?.roles)
+    ? (me as any).roles.map((r: any) => String(r?.role || ""))
+    : [];
+  const isOpsDirector = roleValues.includes("ops_director");
+
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [orgId, setOrgId] = useState<number | "">(() => {
     const raw = localStorage.getItem("pg_selected_org_id");
@@ -113,13 +118,21 @@ export default function AdminAuditHistoryPage() {
 
   const orgOptions = useMemo(() => orgs.map((o) => ({ value: String(o.id), label: o.name })), [orgs]);
 
+  const visibleRuns = useMemo(() => {
+    const items = Array.isArray(runs) ? runs : [];
+    if (!isOpsDirector) return items;
+    return items.filter((r) => String(r?.status || "") === "completed");
+  }, [runs, isOpsDirector]);
+
   return (
     <AppShell>
       <div className="mb-6 flex items-center justify-between gap-3">
         <div>
           <div className="text-2xl font-semibold text-[color:var(--pg-text)]">История аудитов</div>
           <div className="mt-1 text-sm text-[color:var(--pg-muted)]">
-            Здесь собраны завершённые и незавершённые проверки по выбранной организации.
+            {isOpsDirector
+              ? "Здесь собраны завершённые проверки по выбранной организации."
+              : "Здесь собраны завершённые и незавершённые проверки по выбранной организации."}
           </div>
         </div>
 
@@ -127,9 +140,11 @@ export default function AdminAuditHistoryPage() {
           <Button variant="secondary" onClick={() => nav("/admin/audits")}>
             На дашборд аудитов
           </Button>
-          <Button variant="secondary" onClick={() => nav("/admin/audits/templates")}>
-            К шаблонам
-          </Button>
+          {!isOpsDirector && (
+            <Button variant="secondary" onClick={() => nav("/admin/audits/templates")}>
+              К шаблонам
+            </Button>
+          )}
           <Button variant="secondary" onClick={() => void refreshRuns(orgId)} disabled={loading}>
             Обновить
           </Button>
@@ -163,11 +178,11 @@ export default function AdminAuditHistoryPage() {
       {!loading && (
         <GlassCard className="p-5">
           <div className="space-y-2">
-            {(!runs || runs.length === 0) && (
+            {(!visibleRuns || visibleRuns.length === 0) && (
               <div className="text-xs text-[color:var(--pg-muted)]">Для выбранной организации проверки пока не найдены.</div>
             )}
 
-            {(runs || []).map((r) => {
+            {(visibleRuns || []).map((r) => {
               const dt = r.completed_at || r.created_at;
               const titleBase = r.location_name && r.location_name.trim().length ? r.location_name : r.template_name;
               const progress = `${r.answered_count}/${r.total_questions}`;
