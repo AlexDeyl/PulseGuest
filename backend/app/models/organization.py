@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, Boolean
+from sqlalchemy import String, DateTime, Boolean, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -22,6 +24,14 @@ class Organization(Base):
                                       index=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False,
                                             default=True)
+
+    # JSON settings bucket for organization-level configuration.
+    # (PATCH B) stores default review links by group_key.
+    settings: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

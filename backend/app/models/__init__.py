@@ -6,6 +6,13 @@ from app.models.stay import Stay
 from app.models.user import User
 from app.models.role import Role
 from app.models.token import UserRole
+from app.models.audit_checklist import (
+    ChecklistTemplate,
+    ChecklistQuestion,
+    ChecklistRun,
+    ChecklistAnswer,
+    ChecklistAttachment,
+)
 
 __all__ = [
     "Organization",
@@ -17,4 +24,9 @@ __all__ = [
     "User",
     "Role",
     "UserRole",
+    "ChecklistTemplate",
+    "ChecklistQuestion",
+    "ChecklistRun",
+    "ChecklistAnswer",
+    "ChecklistAttachment",
 ]

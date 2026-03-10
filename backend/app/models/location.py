@@ -1,5 +1,7 @@
 from datetime import datetime
-from sqlalchemy import String, DateTime, ForeignKey, Boolean, UniqueConstraint
+from sqlalchemy import String, DateTime, ForeignKey, Boolean, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -40,6 +42,14 @@ class Location(Base):
     code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False,
                                             default=True)
+
+    # JSON settings bucket for location-level configuration.
+    # (PATCH B) stores review link override + inherit toggle.
+    settings: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

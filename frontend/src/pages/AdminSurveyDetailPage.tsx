@@ -5,6 +5,7 @@ import GlassCard from "../components/GlassCard";
 import { Button } from "../components/ui/Button";
 import { adminJson } from "../shared/adminApi";
 import { useDevMode } from "../shared/devMode";
+import { useAuth } from "../shared/auth";
 
 type SurveyVersionRow = {
   id: number;
@@ -41,6 +42,24 @@ export default function AdminSurveyDetailPage() {
   const nav = useNavigate();
   const params = useParams();
   const { enabled: devEnabled } = useDevMode();
+  const { me } = useAuth();
+
+  const roleValues = useMemo(
+    () => (Array.isArray(me?.roles) ? me!.roles.map((r: any) => r?.role) : []),
+    [me]
+  );
+
+  const isAdmin = roleValues.includes("admin");
+  const isOps = roleValues.includes("ops_director") || roleValues.includes("manager");
+  const isService = roleValues.includes("service_manager");
+  const isAuditor = roleValues.includes("auditor") || roleValues.includes("auditor_global");
+  const isDirectorLike = roleValues.includes("director") || roleValues.includes("super_admin");
+  const isAdminLike = isAdmin || isDirectorLike;
+
+  const isStatsOnly = isAuditor && !isAdminLike && !isOps && !isService;
+
+  // location survey detail: редактирование версий — только admin/ops
+  const canEditSurvey = isAdminLike || isOps;
 
   const surveyId = Number(params.surveyId || 0);
 
@@ -84,6 +103,10 @@ export default function AdminSurveyDetailPage() {
 
   const onCreateVersion = async () => {
     if (!surveyId) return;
+    if (!canEditSurvey) {
+      setActionErr("Недостаточно прав: редактирование локальных опросов доступно только Admin/Ops.");
+      return;
+    }
     if (data?.is_archived) {
       setActionErr("Опрос в архиве — сначала верните его из архива.");
       return;
@@ -105,6 +128,10 @@ export default function AdminSurveyDetailPage() {
   };
 
   const onSetActive = async (versionId: number) => {
+    if (!canEditSurvey) {
+      setActionErr("Недостаточно прав: активация версий доступна только Admin/Ops.");
+      return;
+    }
     if (data?.is_archived) {
       setActionErr("Опрос в архиве — версии нельзя делать активными.");
       return;
@@ -122,11 +149,22 @@ export default function AdminSurveyDetailPage() {
     }
   };
 
-  const backToLocation = () => {
-    const locId = data?.location_id;
-    if (locId) nav(`/admin/locations/${locId}/surveys`);
-    else nav("/admin");
-  };
+
+  if (isStatsOnly) {
+    return (
+      <AppShell>
+        <GlassCard>
+          <div className="text-sm font-semibold text-[color:var(--pg-text)]">Доступ ограничен</div>
+          <div className="mt-2 text-sm text-[color:var(--pg-muted)]">
+            Роль <b>Аудитор</b> — доступ только к статистике.
+          </div>
+          <div className="mt-4 flex gap-2">
+            <Button variant="secondary" onClick={() => nav("/admin")}>На дашборд</Button>
+          </div>
+        </GlassCard>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -154,12 +192,12 @@ export default function AdminSurveyDetailPage() {
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={backToLocation}>Назад</Button>
 
                 <Button
                   variant="secondary"
                   onClick={onCreateVersion}
-                  disabled={actionLoading || loading || Boolean(data?.is_archived)}
+                  disabled={!canEditSurvey || actionLoading || loading || Boolean(data?.is_archived)}
+                  title={!canEditSurvey ? "Только Admin/Ops" : undefined}
                 >
                   Создать версию (копия)
                 </Button>
@@ -182,6 +220,12 @@ export default function AdminSurveyDetailPage() {
                   </Button>
                 )}
               </div>
+
+              {!canEditSurvey ? (
+                <div className="mt-2 text-xs text-[color:var(--pg-faint)]">
+                  Только просмотр: локальные опросы локации редактируют Admin/Ops. Для сервис-менеджера — group surveys.
+                </div>
+              ) : null}
 
               {loading && <div className="mt-3 text-xs text-[color:var(--pg-faint)]">Загрузка…</div>}
               {err && <div className="mt-3 text-xs text-rose-300">{err}</div>}
@@ -239,8 +283,9 @@ export default function AdminSurveyDetailPage() {
 
                         <Button
                           variant="secondary"
-                          disabled={actionLoading || v.is_active || Boolean(data?.is_archived)}
+                          disabled={!canEditSurvey || actionLoading || v.is_active || Boolean(data?.is_archived)}
                           onClick={() => onSetActive(v.id)}
+                          title={!canEditSurvey ? "Только Admin/Ops" : undefined}
                         >
                           Сделать активной
                         </Button>
@@ -252,7 +297,7 @@ export default function AdminSurveyDetailPage() {
                 {!loading && (data?.versions?.length ?? 0) === 0 && (
                   <tr className="border-t border-[color:var(--pg-border)]">
                     <td className="px-4 py-6 text-[color:var(--pg-faint)]" colSpan={4}>
-                      Пока нет версий. Создайте первую через “Создать версию”.
+                      Пока нет версий.
                     </td>
                   </tr>
                 )}

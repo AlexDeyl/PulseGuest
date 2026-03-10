@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
@@ -22,5 +22,19 @@ class Submission(Base):
     )  # user-agent, utm, etc (IP можно отключить флагом)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # PATCH C: комментарий сервис-менеджера / принятые меры
+    service_action_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    service_action_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    service_action_updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    negative_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    negative_notified_to: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     survey_version = relationship("SurveyVersion", back_populates="submissions")
