@@ -87,6 +87,23 @@ export default function AdminLocationStaysPage() {
 
   const allowedLocations: Loc[] = (me?.allowed_locations ?? []) as any;
 
+  const roleValues = useMemo(
+    () => (Array.isArray(me?.roles) ? me!.roles.map((r: any) => r?.role) : []),
+    [me]
+  );
+
+  const isAdmin = roleValues.includes("admin");
+  const isOps = roleValues.includes("ops_director") || roleValues.includes("manager");
+  const isService = roleValues.includes("service_manager");
+  const isAuditor = roleValues.includes("auditor") || roleValues.includes("auditor_global");
+  const isDirectorLike = roleValues.includes("director") || roleValues.includes("super_admin");
+  const isAdminLike = isAdmin || isDirectorLike;
+
+  const isStatsOnly = isAuditor && !isAdminLike && !isOps && !isService;
+
+  // По новой модели stays/import — только admin/ops (auditor = stats-only, service_manager stays не трогает)
+  const canAccessStaysPage = isAdminLike || isOps;
+
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [orgId, setOrgId] = useState<number | "">(() => {
     const raw = localStorage.getItem("pg_selected_org_id");
@@ -280,6 +297,26 @@ export default function AdminLocationStaysPage() {
       setImportLoading(false);
     }
   };
+
+  if (isStatsOnly || !canAccessStaysPage) {
+    return (
+      <AppShell>
+        <GlassCard>
+          <div className="text-sm font-semibold text-[color:var(--pg-text)]">Доступ ограничен</div>
+          <div className="mt-2 text-sm text-[color:var(--pg-muted)]">
+            {isStatsOnly ? (
+              <>Роль <b>Аудитор</b> — доступ только к статистике.</>
+            ) : (
+              <>Раздел <b>Проживающие</b> доступен только для <b>Администратора</b> и <b>Операционного директора</b>.</>
+            )}
+          </div>
+          <div className="mt-4 flex gap-2">
+            <Button variant="secondary" onClick={() => nav("/admin")}>На дашборд</Button>
+          </div>
+        </GlassCard>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -496,7 +533,7 @@ export default function AdminLocationStaysPage() {
                     </td>
                     <td className="px-4 py-3 text-[color:var(--pg-muted)]">
                       {s.location_name
-                        ? `${s.location_name}${s.location_slug ? ` • ${s.location_slug}` : ""}`
+                        ? `${s.location_name}${devEnabled && s.location_slug ? ` • ${s.location_slug}` : ""}`
                         : devEnabled
                           ? `#${s.location_id}`
                           : "—"}

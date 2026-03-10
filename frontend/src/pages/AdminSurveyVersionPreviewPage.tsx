@@ -21,7 +21,7 @@ type Resp = {
 };
 
 function errToText(e: any, devEnabled: boolean) {
-  const base = "Не удалось открыть предпросмотр. Попробуйте позже.";
+  const base = "Не удалось открыть предпросмотр анкеты. Попробуйте позже.";
   if (!devEnabled) return base;
   try {
     const detail =
@@ -30,7 +30,7 @@ function errToText(e: any, devEnabled: boolean) {
         : typeof e.detail === "string"
           ? e.detail.slice(0, 500)
           : JSON.stringify(e.detail).slice(0, 500);
-    return [base, detail].filter(Boolean).join(" • ");
+    return detail ? `${base} ${detail}` : base;
   } catch {
     return base;
   }
@@ -176,24 +176,24 @@ export default function AdminSurveyVersionPreviewPage() {
         <GlassCard>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Admin</div>
-              <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">
-                Предпросмотр анкеты
-              </h1>
+              <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Анкеты</div>
+                <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">
+                  Предпросмотр анкеты
+                </h1>
 
               <div className="mt-2 text-sm text-[color:var(--pg-muted)]">
                 Локация: <span className="text-[color:var(--pg-text)]">{location?.name ?? "—"}</span>{" "}
-                • Версия: <span className="text-[color:var(--pg-text)]">{data ? `v${data.version}` : "—"}</span>
+                • Версия: <span className="text-[color:var(--pg-text)]">{data ? `${data.version}` : "—"}</span>
                 {data?.is_active ? <span className="ml-2 text-[color:var(--pg-text)]">• Активная</span> : null}
                 {devEnabled ? (
-                  <span className="ml-2 font-mono text-xs text-[color:var(--pg-muted)]">
-                    loc_id={locationId} survey_id={surveyId} version_id={versionId}
+                  <span className="ml-2 font-mono text-[11px] text-[color:var(--pg-faint)]">
+                    Локация #{locationId} • Опрос #{surveyId} • Версия #{versionId}
                   </span>
                 ) : null}
               </div>
 
               <div className="mt-4 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-3 text-sm text-[color:var(--pg-muted)]">
-                Это предпросмотр “как у гостя”. Ответы <b>никуда не отправляются</b>.
+                Это демонстрационный просмотр анкеты. Ответы здесь <b>не сохраняются</b>.
               </div>
             </div>
 
@@ -204,12 +204,12 @@ export default function AdminSurveyVersionPreviewPage() {
 
               {devEnabled && (
                 <Button variant="secondary" onClick={() => nav(`/admin/survey-versions/${versionId}`)}>
-                  Редактор (Dev)
+                  Открыть редактор
                 </Button>
               )}
 
               <Button variant="secondary" onClick={openPublic} disabled={!location?.slug}>
-                Открыть Public
+                Открыть публичную анкету
               </Button>
             </div>
           </div>
@@ -220,9 +220,11 @@ export default function AdminSurveyVersionPreviewPage() {
             <div className="text-sm text-[color:var(--pg-muted)]">Загрузка…</div>
           </GlassCard>
         ) : err ? (
-          <GlassCard className="border border-rose-500/30">
-            <div className="text-sm font-semibold text-[color:var(--pg-text)]">Ошибка</div>
-            <div className="mt-2 whitespace-pre-wrap text-sm text-rose-300">{err}</div>
+          <GlassCard>
+            <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 px-4 py-3">
+              <div className="text-sm font-semibold text-[color:var(--pg-text)]">Не удалось открыть предпросмотр</div>
+              <div className="mt-2 whitespace-pre-wrap text-sm text-rose-300">{err}</div>
+            </div>
           </GlassCard>
         ) : !uiSchema ? (
           <GlassCard>
@@ -235,12 +237,12 @@ export default function AdminSurveyVersionPreviewPage() {
           <section className="space-y-4">
             <GlassCard>
               <div className="text-sm text-[color:var(--pg-muted)]">{location?.name ?? "PulseGuest"}</div>
-              <h2 className="mt-1 text-3xl font-semibold text-[color:var(--pg-text)]">
-                Оставьте отзыв за 30 секунд
-              </h2>
-              <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
-                Предпросмотр должен выглядеть так же, как на public-странице.
-              </p>
+                <h2 className="mt-1 text-3xl font-semibold text-[color:var(--pg-text)]">
+                  Так анкета будет выглядеть для гостя
+                </h2>
+                <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
+                  Проверьте порядок вопросов, тексты и общую подачу перед публикацией.
+                </p>
             </GlassCard>
 
             <SurveyWizard
@@ -254,13 +256,13 @@ export default function AdminSurveyVersionPreviewPage() {
 
             {devEnabled && (
               <GlassCard>
-                <div className="text-sm font-semibold text-[color:var(--pg-text)]">Dev</div>
+                <div className="text-sm font-semibold text-[color:var(--pg-text)]">Служебные данные</div>
                 <div className="mt-2 text-sm text-[color:var(--pg-muted)]">
-                  slug: <span className="font-mono">{location?.slug ?? "—"}</span>
+                  Адрес анкеты: <span className="font-mono">{location?.slug ?? "—"}</span>
                   <br />
-                  submitLabel: <span className="font-mono">{submitLabel}</span>
+                  Текст кнопки: <span className="font-mono">{submitLabel}</span>
                   <br />
-                  successText: <span className="font-mono">{successText}</span>
+                  Текст после отправки: <span className="font-mono">{successText}</span>
                 </div>
               </GlassCard>
             )}

@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root { height: 100%; }
+html, body, #root { min-height: 100%; }
 
 :root {
   /* default theme */
@@ -21,10 +21,20 @@ html, body, #root { height: 100%; }
   --pg-popover-bg: rgba(10,12,20,0.72);
   --pg-popover-border: rgba(255,255,255,0.12);
 
+  /* header glass (avoid Tailwind /opacity for iOS webviews) */
+  --pg-header: rgba(10, 12, 20, 0.35);
+  --pg-header-scrolled: rgba(10, 12, 20, 0.72);
+
   --pg-input-bg: rgba(255,255,255,0.06);
   --pg-input-border: rgba(255,255,255,0.12);
   --pg-input-border-focus: rgba(255,255,255,0.22);
   --pg-placeholder: rgba(255,255,255,0.40);
+
+  /* success (ACTIVE, OK) */
+  --pg-success-bg: rgba(16,185,129,0.14);
+  --pg-success-bg-strong: rgba(16,185,129,0.18);
+  --pg-success-border: rgba(16,185,129,0.35);
+  --pg-success-text: rgba(167,243,208,0.95);
 
   /* accents */
   --pg-accent-1: rgba(99,102,241,0.20);
@@ -48,17 +58,25 @@ html, body, #root { height: 100%; }
 
   --pg-inset: rgba(255,255,255,0.08);
   --pg-shadow: 0 20px 80px rgba(0,0,0,0.16);
+
+  /* fixed wallpaper background (rendered by <Backdrop/>) */
+  --pg-wallpaper:
+    radial-gradient(1200px 800px at 10% 10%, var(--pg-accent-1), transparent 55%),
+    radial-gradient(1000px 700px at 90% 20%, var(--pg-accent-2), transparent 55%),
+    radial-gradient(900px 700px at 50% 100%, var(--pg-accent-3), transparent 55%),
+    var(--pg-bg);
 }
 
 html[data-theme="light"] {
-  background:
+  color-scheme: light;
+
+  /* fixed wallpaper background (rendered by <Backdrop/>) */
+  --pg-wallpaper:
     radial-gradient(900px 600px at 15% 0%, rgba(255,255,255,0.85), transparent 55%),
     radial-gradient(1200px 800px at 10% 10%, var(--pg-accent-1), transparent 55%),
     radial-gradient(1000px 700px at 90% 20%, var(--pg-accent-2), transparent 55%),
     radial-gradient(900px 700px at 50% 100%, var(--pg-accent-3), transparent 55%),
     var(--pg-bg);
-    
-  color-scheme: light;
 
   /* фон: чуть холоднее, не белый */
   --pg-bg: #e9eef6;
@@ -79,11 +97,21 @@ html[data-theme="light"] {
   --pg-popover-bg: rgba(255, 255, 255, 0.96);
   --pg-popover-border: rgba(9, 12, 18, 0.16);
 
+  /* header glass (light) */
+  --pg-header: rgba(255, 255, 255, 0.72);
+  --pg-header-scrolled: rgba(255, 255, 255, 0.92);
+
   /* инпуты: контрастнее, чтобы не сливались */
   --pg-input-bg: rgba(255, 255, 255, 0.92);
   --pg-input-border: rgba(9, 12, 18, 0.18);
   --pg-input-border-focus: rgba(9, 12, 18, 0.32);
   --pg-placeholder: rgba(9, 12, 18, 0.44);
+
+  /* success (ACTIVE, OK) — stronger in light theme */
+  --pg-success-bg: rgba(16,185,129,0.16);
+  --pg-success-bg-strong: rgba(16,185,129,0.22);
+  --pg-success-border: rgba(16,185,129,0.52);
+  --pg-success-text: rgba(6,95,70,0.96);
 
   /* акценты: чуть более “чистые” */
   --pg-accent-1: rgba(99, 102, 241, 0.14);
@@ -120,12 +148,25 @@ html[data-theme="light"] {
 }
 
 body {
-  background:
-    radial-gradient(1200px 800px at 10% 10%, var(--pg-accent-1), transparent 55%),
-    radial-gradient(1000px 700px at 90% 20%, var(--pg-accent-2), transparent 55%),
-    radial-gradient(900px 700px at 50% 100%, var(--pg-accent-3), transparent 55%),
-    var(--pg-bg);
+  min-height: 100vh;
+  background: var(--pg-bg); /* base solid, wallpaper is fixed behind via Backdrop */
   color: var(--pg-text);
+}
+
+/* Native <select> dropdown colors in DARK theme (Windows/Chrome иначе рисует белым) */
+html:not([data-theme="light"]) select {
+  color-scheme: dark;
+}
+
+/* Важное: окраска списка опций */
+html:not([data-theme="light"]) select option,
+html:not([data-theme="light"]) select optgroup {
+  background-color: #0a0c14; /* solid, без прозрачности (option плохо дружит с alpha) */
+  color: var(--pg-text);
+}
+
+html:not([data-theme="light"]) select option:disabled {
+  color: var(--pg-faint);
 }
 
 /* DayPicker theme */
@@ -201,5 +242,124 @@ body {
   @keyframes pg-wipe {
     from { --wipe: 0%; }
     to { --wipe: 100%; }
+  }
+}
+
+/* Premium mobile sticky header glass (iOS/Telegram webview safe) */
+@media (max-width: 639px) {
+  .pg-header {
+    background: rgba(10, 12, 20, 0.34) !important;
+
+    /* IMPORTANT for iOS */
+    -webkit-backdrop-filter: blur(18px) saturate(165%);
+    backdrop-filter: blur(18px) saturate(165%);
+
+    will-change: backdrop-filter, background-color;
+    transform: translateZ(0);
+  }
+
+  html[data-theme="light"] .pg-header {
+    background: rgba(255, 255, 255, 0.78) !important;
+  }
+
+  /* soft sheen overlay */
+  .pg-header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 220ms ease;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.02) 45%,
+      rgba(0, 0, 0, 0.12) 100%
+    );
+  }
+
+  html[data-theme="light"] .pg-header::before {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.88) 0%,
+      rgba(255, 255, 255, 0.24) 45%,
+      rgba(9, 12, 18, 0.06) 100%
+    );
+  }
+
+  /* subtle bottom divider */
+  .pg-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    pointer-events: none;
+    opacity: 0.65;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  }
+
+  html[data-theme="light"] .pg-header::after {
+    background: linear-gradient(90deg, transparent, rgba(9, 12, 18, 0.16), transparent);
+  }
+
+  /* ✅ NOISE LAYER (works because it's a real element) */
+  .pg-header__noise {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.10;
+    mix-blend-mode: overlay;
+    background:
+      repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.06) 0px,
+        rgba(255, 255, 255, 0.06) 1px,
+        rgba(0, 0, 0, 0.02) 2px,
+        rgba(0, 0, 0, 0.02) 3px
+      ),
+      repeating-linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.03) 0px,
+        rgba(255, 255, 255, 0.03) 1px,
+        rgba(0, 0, 0, 0.015) 2px,
+        rgba(0, 0, 0, 0.015) 3px
+      );
+  }
+
+  html[data-theme="light"] .pg-header__noise {
+    opacity: 0.08;
+    mix-blend-mode: multiply;
+  }
+
+  /* when scrolled */
+  .pg-header.pg-header--scrolled {
+    background: rgba(10, 12, 20, 0.78) !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  }
+
+  html[data-theme="light"] .pg-header.pg-header--scrolled {
+    background: rgba(255, 255, 255, 0.93) !important;
+    box-shadow: 0 12px 32px rgba(9, 12, 18, 0.10);
+  }
+
+  .pg-header.pg-header--scrolled::before {
+    opacity: 1;
+  }
+
+  .pg-header.pg-header--scrolled .pg-header__noise {
+    opacity: 0.14;
+  }
+
+  html[data-theme="light"] .pg-header.pg-header--scrolled .pg-header__noise {
+    opacity: 0.10;
+  }
+
+  /* ✅ keep content above overlays, but keep noise under */
+  .pg-header > :not(.pg-header__noise) {
+    position: relative;
+    z-index: 1;
   }
 }

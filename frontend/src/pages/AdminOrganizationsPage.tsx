@@ -35,10 +35,24 @@ export default function AdminOrganizationsPage() {
   const { enabled: devEnabled } = useDevMode();
   const nav = useNavigate();
 
-  const canManage = useMemo(() => {
-    const roles = Array.isArray(me?.roles) ? me?.roles : [];
-    return roles.some((r: any) => r?.role === "director");
-  }, [me]);
+  const roleValues = useMemo(
+    () => (Array.isArray(me?.roles) ? me!.roles.map((r: any) => r?.role) : []),
+    [me]
+  );
+
+  const isAdmin = roleValues.includes("admin");
+  const isOps = roleValues.includes("ops_director") || roleValues.includes("manager");
+  const isService = roleValues.includes("service_manager");
+  const isAuditor = roleValues.includes("auditor") || roleValues.includes("auditor_global");
+  const isDirectorLike = roleValues.includes("director") || roleValues.includes("super_admin");
+  const isAdminLike = isAdmin || isDirectorLike;
+
+  const isStatsOnly = isAuditor && !isAdminLike && !isOps && !isService;
+
+  // В рамках нового RBAC:
+  // - admin (и legacy director/super_admin на время миграции) может создавать/редактировать организации
+  // - ops_director НЕ создаёт организации (и не редактирует тут, чтобы не упираться в backend-ограничения)
+  const canManageOrgs = isAdminLike;
 
   const [items, setItems] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,7 +97,7 @@ export default function AdminOrganizationsPage() {
   };
 
   const submit = async () => {
-    if (!canManage) return;
+    if (!canManageOrgs) return;
     setError(null);
 
     try {
@@ -105,6 +119,22 @@ export default function AdminOrganizationsPage() {
     }
   };
 
+  if (isStatsOnly) {
+    return (
+      <AppShell>
+        <GlassCard>
+          <div className="text-sm text-[color:var(--pg-text)] font-semibold">Доступ ограничен</div>
+          <div className="mt-2 text-sm text-[color:var(--pg-muted)]">
+            Роль <b>Аудитор</b> — доступ только к статистике.
+          </div>
+          <div className="mt-4 flex gap-2">
+            <Button variant="secondary" onClick={() => nav("/admin")}>На дашборд</Button>
+          </div>
+        </GlassCard>
+      </AppShell>
+    );
+  }
+
   return (
     <AppShell>
       <div className="mb-6 flex items-center justify-between gap-3">
@@ -112,7 +142,7 @@ export default function AdminOrganizationsPage() {
           <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Admin</div>
           <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Организации</h1>
           <div className="mt-1 text-xs text-[color:var(--pg-muted)]">
-            Director может создавать/редактировать/деактивировать. Остальные — только просмотр.
+            Администратор может создавать/редактировать/деактивировать. Ops director и другие — только просмотр.
           </div>
         </div>
 
@@ -127,7 +157,7 @@ export default function AdminOrganizationsPage() {
         </GlassCard>
       )}
 
-      {canManage && (
+      {canManageOrgs && (
         <GlassCard className="mb-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm font-semibold text-[color:var(--pg-text)]">
@@ -196,7 +226,7 @@ export default function AdminOrganizationsPage() {
               <thead className="text-left text-[color:var(--pg-muted)]">
                 <tr>
                   <th className="py-2 pr-4">Название</th>
-                  <th className="py-2 pr-4">Слаг</th>
+                  {devEnabled ? <th className="py-2 pr-4">Слаг</th> : null}
                   <th className="py-2 pr-4">Статус</th>
                   <th className="py-2 pr-4">Действия</th>
                 </tr>
@@ -205,7 +235,7 @@ export default function AdminOrganizationsPage() {
                 {items.map((o) => (
                   <tr key={o.id} className="border-t border-[color:var(--pg-border)]">
                     <td className="py-3 pr-4">{o.name}</td>
-                    <td className="py-3 pr-4 font-mono">{o.slug}</td>
+                    {devEnabled ? <td className="py-3 pr-4 font-mono">{o.slug}</td> : null}
                     <td className="py-3 pr-4">
                       {o.is_active ? "Активна" : <span className="opacity-70">Отключена</span>}
                     </td>
@@ -218,7 +248,7 @@ export default function AdminOrganizationsPage() {
                           Локации
                         </Button>
 
-                        {canManage && (
+                        {canManageOrgs && (
                           <Button variant="secondary" onClick={() => startEdit(o)}>
                             Редактировать
                           </Button>

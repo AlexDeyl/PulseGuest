@@ -281,7 +281,7 @@ async def list_org_stays(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.director, Role.auditor_global, Role.auditor, Role.manager, Role.service_manager)),
+    _=Depends(require_roles(Role.admin, Role.ops_director, Role.director, Role.auditor_global, Role.auditor, Role.manager, Role.service_manager)),
 ):
     accessible_locs = await _get_accessible_locations_in_org(db=db, user=user, org_id=org_id)
     if not accessible_locs:
@@ -359,7 +359,7 @@ async def import_org_stays_csv(
     skip_unknown_rooms: bool = Query(True, description="Skip rows if room can't be mapped to a location"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.director, Role.manager, Role.service_manager)),
+    _=Depends(require_roles(Role.admin, Role.ops_director, Role.director, Role.manager, Role.service_manager)),
 ):
     accessible_locs = await _get_accessible_locations_in_org(db=db, user=user, org_id=org_id)
     if not accessible_locs:
@@ -603,7 +603,7 @@ async def list_stays(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.director, Role.auditor_global, Role.auditor, Role.manager, Role.service_manager)),
+    _=Depends(require_roles(Role.admin, Role.ops_director, Role.director, Role.auditor_global, Role.auditor, Role.manager, Role.service_manager)),
 ):
     allowed_loc_ids = await get_allowed_location_ids(db=db, user=user)
     if location_id not in allowed_loc_ids:
@@ -657,7 +657,7 @@ async def import_stays_csv(
     max_rows: int = Query(20000, ge=1, le=50000),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.director, Role.manager, Role.service_manager)),
+    _=Depends(require_roles(Role.admin, Role.ops_director, Role.director, Role.manager, Role.service_manager)),
 ):
     allowed_loc_ids = await get_allowed_location_ids(db=db, user=user)
     if location_id not in allowed_loc_ids:
@@ -863,7 +863,7 @@ async def export_stays_csv(
     max_rows: int = Query(50000, ge=1, le=50000),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-    _=Depends(require_roles(Role.director, Role.auditor_global, Role.auditor, Role.manager, Role.service_manager)),
+    _=Depends(require_roles(Role.admin, Role.ops_director, Role.director, Role.auditor_global, Role.auditor, Role.manager, Role.service_manager)),
 ):
     allowed_loc_ids = await get_allowed_location_ids(db=db, user=user)
     if location_id not in allowed_loc_ids:

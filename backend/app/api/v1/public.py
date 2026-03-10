@@ -1,22 +1,39 @@
 from __future__ import annotations
 import re
+import logging
 
 from datetime import datetime, timezone, date
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Response, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, or_
 
 from app.api.v1.deps import get_db
 from app.core.config import settings
 from app.models.location import Location
+from app.models.organization import Organization
 from app.models.survey import Survey, SurveyVersion
 from app.models.submission import Submission
+from app.models.group_survey_binding import GroupSurveyBinding
+from app.services.public_url import build_public_url
+from app.services.review_links import compute_effective_review_links
+from app.services.qr import make_qr_png, make_qr_svg
+from app.services.mailer import send_email_text, is_smtp_configured
+from app.services.negative_feedback import (
+    acquire_negative_notify_lock,
+    build_admin_submission_link,
+    build_negative_email,
+    compute_overall_score,
+    extract_short_comment,
+    get_service_manager_emails_for_location,
+    is_negative,
+)
 
 # Patch 8.2.x
 from app.models.stay import Stay  # type: ignore
 
 router = APIRouter(tags=["public"])
+logger = logging.getLogger(__name__)
 
 
 def build_greeting(display_name: str | None = None) -> str:
@@ -36,6 +53,50 @@ def build_greeting(display_name: str | None = None) -> str:
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+async def _resolve_active_survey_for_location(db: AsyncSession, loc: Location) -> tuple[SurveyVersion, Survey] | None:
+    """
+    Order:
+      1) group binding (org_id + group_key=loc.type)
+      2) fallback: location-level active survey (as before)
+    """
+    binding = (
+        await db.execute(
+            select(GroupSurveyBinding)
+            .where(
+                GroupSurveyBinding.organization_id == loc.organization_id,
+                GroupSurveyBinding.group_key == loc.type,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if binding:
+        ver = (await db.execute(select(SurveyVersion).where(SurveyVersion.id == binding.active_version_id))).scalar_one_or_none()
+        survey = (await db.execute(select(Survey).where(Survey.id == binding.survey_id))).scalar_one_or_none()
+        if ver and survey and (ver.survey_id == survey.id) and (not bool(getattr(survey, "is_archived", False))):
+            return ver, survey
+
+    row = (
+        await db.execute(
+            select(SurveyVersion, Survey)
+            .join(Survey, Survey.id == SurveyVersion.survey_id)
+            .where(
+                Survey.location_id == loc.id,
+                SurveyVersion.is_active == True,  # noqa: E712
+                Survey.is_archived == False,      # noqa: E712
+            )
+            .order_by(desc(SurveyVersion.version), desc(SurveyVersion.created_at), desc(SurveyVersion.id))
+            .limit(1)
+        )
+    ).first()
+
+    if not row:
+        return None
+
+    ver, survey = row
+    return ver, survey
 
 
 def _validate_answers_against_schema(schema: dict | None, answers: dict) -> list[str]:
@@ -104,6 +165,51 @@ def _validate_answers_against_schema(schema: dict | None, answers: dict) -> list
                     except Exception:
                         pass
 
+        elif stype == "choice":
+            name = slide.get("field")
+            required = bool(slide.get("required"))
+            if not name:
+                continue
+
+            mode = str(slide.get("mode") or "single")  # "single" | "multi"
+            raw_opts = slide.get("options") or []
+            allowed: set[str] = set()
+
+            if isinstance(raw_opts, list):
+                for o in raw_opts:
+                    if isinstance(o, dict):
+                        v = o.get("value")
+                        if isinstance(v, str) and v.strip():
+                            allowed.add(v.strip())
+
+            v = answers.get(name)
+
+            if required:
+                if v is None or v == "" or (isinstance(v, list) and len(v) == 0):
+                    errors.append(f"missing:{name}")
+                    continue
+
+            if v is None or v == "":
+                continue
+
+            if mode == "multi":
+                if not isinstance(v, list):
+                    errors.append(f"invalid:{name}:list")
+                    continue
+                for item in v:
+                    if not isinstance(item, str):
+                        errors.append(f"invalid:{name}:list_str")
+                        break
+                    if allowed and item not in allowed:
+                        errors.append(f"invalid:{name}:option")
+                        break
+            else:
+                if not isinstance(v, str):
+                    errors.append(f"invalid:{name}:str")
+                    continue
+                if allowed and v not in allowed:
+                    errors.append(f"invalid:{name}:option")
+
         elif stype == "contact":
             fields = slide.get("fields") or []
             if not isinstance(fields, list):
@@ -164,6 +270,35 @@ async def _find_current_stay_for_room(
             .where(
                 Stay.location_id == location_id,
                 Stay.room == room,
+                Stay.checkin_at <= on,
+                Stay.checkout_at >= on,
+            )
+            .order_by(desc(Stay.checkin_at), desc(Stay.id))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return s
+
+
+async def _find_current_stay_for_location(
+    db: AsyncSession,
+    *,
+    location_id: int,
+    on: date | None = None,
+) -> Stay | None:
+    """
+    Для локации-номера (type == room) ищем актуальный stay без query-параметра room:
+      checkin_at <= on <= checkout_at
+    Берём самый свежий по checkin_at/id.
+    """
+    on = on or datetime.now(timezone.utc).date()
+
+    s = (
+        await db.execute(
+            select(Stay)
+            .where(
+                Stay.location_id == location_id,
                 Stay.checkin_at <= on,
                 Stay.checkout_at >= on,
             )
@@ -257,26 +392,12 @@ async def resolve_by_slug(
     loc = locs[0]
 
     # active survey (как было, без is_archived на SurveyVersion!)
-    row = (
-        await db.execute(
-            select(SurveyVersion, Survey)
-            .join(Survey, Survey.id == SurveyVersion.survey_id)
-            .where(
-                Survey.location_id == loc.id,
-                SurveyVersion.is_active == True,  # noqa: E712
-            )
-            .order_by(
-                desc(SurveyVersion.version),
-                desc(SurveyVersion.created_at),
-                desc(SurveyVersion.id),
-            )
-            .limit(1)
-        )
-    ).first()
+    # active survey (group-first -> fallback location)
+    resolved = await _resolve_active_survey_for_location(db, loc)
 
     active = None
-    if row:
-        ver, survey = row
+    if resolved:
+        ver, survey = resolved
         active = {
             "survey_id": survey.id,
             "version_id": ver.id,
@@ -318,10 +439,27 @@ async def resolve_by_slug(
         if room_loc:
             stay = await find_stay(room_loc.id)
 
+    # Если это номер и room не передали (гость сканит QR из номера),
+    # то попробуем найти актуальный stay по самой локации.
+    if not stay and (not room) and (loc.type == "room"):
+        stay = await _find_current_stay_for_location(db, location_id=loc.id)
+
     if stay:
         display_name = stay.guest_name
         # guest включает stay_id
         guest = _stay_to_guest(stay)
+    
+    # Effective review links for thank-you CTA (PATCH B)
+    org = (
+        await db.execute(select(Organization).where(Organization.id == loc.organization_id))
+    ).scalar_one_or_none()
+    review_links = None
+    if org:
+        review_links = compute_effective_review_links(
+            org_settings=getattr(org, "settings", None),
+            group_key=loc.type,
+            location_settings=getattr(loc, "settings", None),
+        )
 
     return {
         "location": {
@@ -332,10 +470,97 @@ async def resolve_by_slug(
             "name": loc.name,
             "slug": loc.slug,
         },
+        "review_links": review_links,
         "active": active,
         "guest": guest,
         "greeting": build_greeting(display_name),
     }
+
+
+def _qr_cache_headers(etag: str) -> dict[str, str]:
+    # 1 day caching; revalidate with ETag.
+    return {"ETag": f"\"{etag}\"", "Cache-Control": "public, max-age=86400"}
+
+
+@router.get("/qr/{slug}.svg")
+async def public_qr_svg(
+    slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public QR (SVG) by location slug.
+
+    Safe-by-default: returns only the QR image for already-public slug.
+    Useful for devices/screens that can't use admin auth.
+    """
+    slug_norm = slug.strip().lower()
+    loc = (
+        (
+            await db.execute(
+                select(Location).where(
+                    Location.slug == slug_norm,
+                    Location.is_active == True,  # noqa: E712
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not loc:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    payload = build_public_url(loc.slug)
+    svg_bytes, etag = make_qr_svg(payload)
+
+    inm = (request.headers.get("if-none-match") or "").strip().strip('"')
+    if inm and inm == etag:
+        return Response(status_code=304, headers=_qr_cache_headers(etag))
+
+    return Response(
+        content=svg_bytes,
+        media_type="image/svg+xml",
+        headers=_qr_cache_headers(etag),
+    )
+
+
+@router.get("/qr/{slug}.png")
+async def public_qr_png(
+    slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public QR (PNG) by location slug."""
+    slug_norm = slug.strip().lower()
+    loc = (
+        (
+            await db.execute(
+                select(Location).where(
+                    Location.slug == slug_norm,
+                    Location.is_active == True,  # noqa: E712
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not loc:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    payload = build_public_url(loc.slug)
+    try:
+        png_bytes, etag = make_qr_png(payload)
+    except Exception:
+        raise HTTPException(status_code=501, detail="PNG QR is not available in this build")
+
+    inm = (request.headers.get("if-none-match") or "").strip().strip('"')
+    if inm and inm == etag:
+        return Response(status_code=304, headers=_qr_cache_headers(etag))
+
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers=_qr_cache_headers(etag),
+    )
 
 
 @router.get("/locations/{location_id}/active-survey")
@@ -344,38 +569,42 @@ async def get_active_survey(location_id: int, db: AsyncSession = Depends(get_db)
     if not loc or not loc.is_active:
         raise HTTPException(status_code=404, detail="Location not found")
 
-    row = (
-        await db.execute(
-            select(SurveyVersion, Survey)
-            .join(Survey, Survey.id == SurveyVersion.survey_id)
-            .where(
-                Survey.location_id == loc.id,
-                SurveyVersion.is_active == True,  # noqa: E712
-            )
-            .order_by(
-                desc(SurveyVersion.version),
-                desc(SurveyVersion.created_at),
-                desc(SurveyVersion.id),
-            )
-            .limit(1)
-        )
-    ).first()
+    resolved = await _resolve_active_survey_for_location(db, loc)
 
-    if not row:
+    if not resolved:
         raise HTTPException(status_code=404, detail="No active survey")
 
-    ver, survey = row
+    ver, survey = resolved
+
+    # Effective review links for thank-you CTA (PATCH B)
+    org = (
+        await db.execute(select(Organization).where(Organization.id == loc.organization_id))
+    ).scalar_one_or_none()
+    review_links = None
+    if org:
+        review_links = compute_effective_review_links(
+            org_settings=getattr(org, "settings", None),
+            group_key=loc.type,
+            location_settings=getattr(loc, "settings", None),
+        )
+
     return {
         "survey_id": survey.id,
         "version_id": ver.id,
         "version": ver.version,
         "schema": ver.schema,
         "widget_config": ver.widget_config,
+        "review_links": review_links,
     }
 
 
 @router.post("/submissions")
-async def submit_answers(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
+async def submit_answers(
+    payload: dict,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     """
     payload ожидается:
       { "version_id": int (optional), "location_id": int, "answers": {...}, "meta": {...optional...} }
@@ -403,42 +632,47 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
     if not loc or not loc.is_active:
         raise HTTPException(status_code=404, detail="Location not found")
 
-    # 3) find / validate active version for this location
+    # 3) find / validate active version for this location (group-first -> fallback location)
     if version_id_raw is None:
-        row = (
-            await db.execute(
-                select(SurveyVersion, Survey)
-                .join(Survey, Survey.id == SurveyVersion.survey_id)
-                .where(
-                    Survey.location_id == loc.id,
-                    SurveyVersion.is_active == True,  # noqa: E712
-                )
-                .order_by(
-                    desc(SurveyVersion.version),
-                    desc(SurveyVersion.created_at),
-                    desc(SurveyVersion.id),
-                )
-                .limit(1)
-            )
-        ).first()
-
-        if not row:
+        resolved = await _resolve_active_survey_for_location(db, loc)
+        if not resolved:
             raise HTTPException(status_code=404, detail="No active survey")
-
-        ver, _survey = row
+        ver, _survey = resolved
     else:
         try:
             version_id = int(version_id_raw)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid version_id")
 
-        ver = (await db.execute(select(SurveyVersion).where(SurveyVersion.id == version_id))).scalar_one_or_none()
+        ver = (
+            await db.execute(select(SurveyVersion).where(SurveyVersion.id == version_id))
+        ).scalar_one_or_none()
         if not ver:
             raise HTTPException(status_code=404, detail="Survey version not found")
 
         survey = (await db.execute(select(Survey).where(Survey.id == ver.survey_id))).scalar_one_or_none()
-        if not survey or survey.location_id != loc.id:
-            raise HTTPException(status_code=400, detail="version_id does not belong to location")
+        if not survey:
+            raise HTTPException(status_code=404, detail="Survey not found")
+
+        # Allowed:
+        #  - location survey (survey.location_id == loc.id)
+        #  - group survey bound to (loc.organization_id + loc.type)
+        if survey.location_id == loc.id:
+            pass
+        elif survey.location_id is None:
+            binding = (
+                await db.execute(
+                    select(GroupSurveyBinding).where(
+                        GroupSurveyBinding.organization_id == loc.organization_id,
+                        GroupSurveyBinding.group_key == loc.type,
+                        GroupSurveyBinding.survey_id == survey.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if not binding:
+                raise HTTPException(status_code=400, detail="version_id does not belong to location/group")
+        else:
+            raise HTTPException(status_code=400, detail="version_id does not belong to location/group")
 
     # 4) validate against schema
     errors = _validate_answers_against_schema(ver.schema, answers)
@@ -529,5 +763,96 @@ async def submit_answers(payload: dict, request: Request, db: AsyncSession = Dep
     db.add(sub)
     await db.commit()
     await db.refresh(sub)
+
+    # PATCH E: negative feedback email notification (idempotent + best-effort throttling)
+    try:
+        overall = compute_overall_score(answers=answers, schema=ver.schema)
+        if overall is not None:
+            score, scale = overall
+
+            if is_negative(score, scale):
+                # 1) Best-effort cooldown to mitigate accidental double-submits
+                allowed_now = await acquire_negative_notify_lock(location_id=int(loc.id))
+                if not allowed_now:
+                    logger.info(
+                        "Negative feedback notify throttled (cooldown) for location_id=%s submission_id=%s",
+                        loc.id,
+                        sub.id,
+                    )
+                else:
+                    # 2) Gather recipients
+                    emails = await get_service_manager_emails_for_location(
+                        db=db,
+                        organization_id=int(loc.organization_id),
+                        location_id=int(loc.id),
+                        group_key=str(loc.type),
+                    )
+
+                    if not emails:
+                        logger.info(
+                            "Negative feedback detected for submission_id=%s but no service_manager recipients found (org=%s loc=%s group=%s)",
+                            sub.id,
+                            loc.organization_id,
+                            loc.id,
+                            loc.type,
+                        )
+                    else:
+                        # 3) Idempotency: send only once per submission
+                        if getattr(sub, "negative_notified_at", None):
+                            logger.info(
+                                "Negative feedback already notified for submission_id=%s; skipping",
+                                sub.id,
+                            )
+                        else:
+                            org = (
+                                await db.execute(
+                                    select(Organization).where(Organization.id == loc.organization_id)
+                                )
+                            ).scalar_one_or_none()
+                            org_name = (org.name if org else f"org#{loc.organization_id}")
+                            loc_name = (loc.name or f"loc#{loc.id}")
+                            when_iso = (
+                                sub.created_at.isoformat()
+                                if getattr(sub, "created_at", None)
+                                else None
+                            )
+                            short_comment = extract_short_comment(answers=answers, schema=ver.schema)
+                            link = build_admin_submission_link(sub.id)
+
+                            subject, body = build_negative_email(
+                                org_name=org_name,
+                                loc_name=loc_name,
+                                loc_code=getattr(loc, "code", None),
+                                group_key=str(loc.type),
+                                when_iso=when_iso,
+                                score=int(score),
+                                scale=int(scale),
+                                short_comment=short_comment,
+                                admin_link=link,
+                            )
+
+                            # Mark as notified BEFORE enqueueing (prevents double-send on any accidental re-entry)
+                            try:
+                                sub.negative_notified_at = datetime.now(timezone.utc)
+                                sub.negative_notified_to = ",".join(emails)
+                                await db.commit()
+                                await db.refresh(sub)
+                            except Exception:
+                                # Do not break submit; if mark fails, we still try to send once
+                                logger.exception("Failed to persist negative_notified_* (non-fatal)")
+
+                            # enqueue emails
+                            for to_email in emails:
+                                background_tasks.add_task(send_email_text, to_email, subject, body)
+
+                            if settings.DEBUG and not is_smtp_configured():
+                                logger.warning(
+                                    "[DEV] Negative feedback notification prepared (SMTP not configured). link=%s recipients=%s",
+                                    link,
+                                    ",".join(emails),
+                                )
+    except Exception:
+        # must never break public submit
+        logger.exception("Negative feedback notification failed (non-fatal)")
 
     return {"ok": True, "id": sub.id}

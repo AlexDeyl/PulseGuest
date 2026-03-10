@@ -34,20 +34,51 @@ def group_label_ru(group_key: str) -> str:
     return GROUP_LABELS_RU.get(group_key, group_key)
 
 
+def _comment_text(v) -> str:
+    """Stats must never crash on non-string 'comment' values.
+
+    In some surveys, 'comment' may be a list (e.g., multi_select) or another JSON type.
+    """
+    if v is None:
+        return ""
+
+    if isinstance(v, str):
+        return v.strip()
+
+    if isinstance(v, list):
+        parts: list[str] = []
+        for item in v:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                t = item.strip()
+                if t:
+                    parts.append(t)
+            else:
+                parts.append(str(item))
+        return ", ".join(parts).strip()
+
+    return str(v).strip()
+
+
 @router.get("/organizations/{organization_id}/summary")
 async def organization_summary(
     organization_id: int,
     days: int = Query(30, ge=1, le=365),
     comments_limit: int = Query(10, ge=1, le=50),
-    locations_limit: int = Query(50, ge=1, le=200),
+    locations_limit: int = Query(200, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     _user=Depends(
         require_roles(
+            # new roles
+            Role.admin,
+            Role.ops_director,
+            Role.service_manager,
+            Role.auditor,
+            # legacy roles (compat)
             Role.director,
             Role.auditor_global,
-            Role.auditor,
             Role.manager,
-            Role.service_manager,
             Role.employee,
         )
     ),
@@ -179,7 +210,7 @@ async def organization_summary(
                 "location_id": s.location_id,
                 "location_name": loc_name or "",
                 "rating_overall": a.get("rating_overall"),
-                "comment": (a.get("comment") or "").strip(),
+                "comment": _comment_text(a.get("comment")),
                 "name": a.get("name") or "",
                 "email": a.get("email") or "",
                 "room": m.get("room") or "",
@@ -259,15 +290,19 @@ async def organization_group_summary(
     group_key: str,
     days: int = Query(30, ge=1, le=365),
     comments_limit: int = Query(10, ge=1, le=50),
-    locations_limit: int = Query(200, ge=1, le=500),
+    locations_limit: int = Query(200, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     _user=Depends(
         require_roles(
+            # new roles
+            Role.admin,
+            Role.ops_director,
+            Role.service_manager,
+            Role.auditor,
+            # legacy roles (compat)
             Role.director,
             Role.auditor_global,
-            Role.auditor,
             Role.manager,
-            Role.service_manager,
             Role.employee,
         )
     ),
@@ -414,7 +449,7 @@ async def organization_group_summary(
                 "location_id": s.location_id,
                 "location_name": loc_name or "",
                 "rating_overall": a.get("rating_overall"),
-                "comment": (a.get("comment") or "").strip(),
+                "comment": _comment_text(a.get("comment")),
                 "name": a.get("name") or "",
                 "email": a.get("email") or "",
                 "room": m.get("room") or "",
@@ -498,11 +533,15 @@ async def location_summary(
     db: AsyncSession = Depends(get_db),
     _user=Depends(
         require_roles(
+            # new roles
+            Role.admin,
+            Role.ops_director,
+            Role.service_manager,
+            Role.auditor,
+            # legacy roles (compat)
             Role.director,
             Role.auditor_global,
-            Role.auditor,
             Role.manager,
-            Role.service_manager,
             Role.employee,
         )
     ),
@@ -606,7 +645,7 @@ async def location_summary(
                 "id": s.id,
                 "created_at": s.created_at.isoformat(),
                 "rating_overall": a.get("rating_overall"),
-                "comment": (a.get("comment") or "").strip(),
+                "comment": _comment_text(a.get("comment")),
                 "name": a.get("name") or "",
                 "email": a.get("email") or "",
                 # Patch 8.4: гостевые поля (если есть)

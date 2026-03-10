@@ -43,19 +43,20 @@ type ListResp = {
 };
 
 function errToText(e: any, devEnabled: boolean) {
-  if (!e) return "Ошибка запроса. Попробуйте ещё раз.";
+  if (!e) return "Не удалось загрузить отзывы. Попробуйте ещё раз.";
   if (typeof e?.detail === "string") return e.detail;
   if (typeof e?.detail?.detail === "string") return e.detail.detail;
 
   if (devEnabled) {
     try {
-      return JSON.stringify(e?.detail ?? e, null, 2);
+      const detail = JSON.stringify(e?.detail ?? e, null, 2);
+      return detail ? `Не удалось загрузить отзывы. ${detail}` : "Не удалось загрузить отзывы.";
     } catch {
-      return String(e?.message ?? "Ошибка");
+      return "Не удалось загрузить отзывы.";
     }
   }
 
-  return "Не удалось загрузить данные. Попробуйте обновить страницу.";
+  return "Не удалось загрузить отзывы. Обновите страницу и попробуйте снова.";
 }
 
 export default function AdminSubmissionsPage() {
@@ -64,6 +65,42 @@ export default function AdminSubmissionsPage() {
   const nav = useNavigate();
 
   const allowedLocations: LocShort[] = (me?.allowed_locations ?? []) as any;
+
+  const allowedOrgIds = useMemo(() => {
+    const xs = Array.isArray(me?.allowed_organization_ids) ? me!.allowed_organization_ids : [];
+    return xs.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n));
+  }, [me]);
+
+  const roleValues = useMemo(
+    () => (Array.isArray(me?.roles) ? me!.roles.map((r: any) => r?.role) : []),
+    [me]
+  );
+
+  const isAdmin = roleValues.includes("admin");
+  const isOps = roleValues.includes("ops_director") || roleValues.includes("manager");
+  const isService = roleValues.includes("service_manager");
+  const isAuditor = roleValues.includes("auditor") || roleValues.includes("auditor_global");
+  const isDirectorLike = roleValues.includes("director") || roleValues.includes("super_admin");
+  const isAdminLike = isAdmin || isDirectorLike;
+
+  const canViewSubmissions = isAdminLike || isOps || isService || isAuditor;
+
+  if (!canViewSubmissions) {
+    return (
+      <AppShell>
+        <GlassCard>
+          <div className="text-sm font-semibold text-[color:var(--pg-text)]">Доступ ограничен</div>
+          <div className="mt-2 text-sm text-[color:var(--pg-muted)]">
+            Раздел <b>Отзывы</b> доступен только для ролей: <b>Администратор</b>, <b>Операционный директор</b>,
+            <b>Сервис-менеджер</b>, <b>Аудитор</b>.
+          </div>
+          <div className="mt-4 flex gap-2">
+            <Button variant="secondary" onClick={() => nav("/admin")}>На дашборд</Button>
+          </div>
+        </GlassCard>
+      </AppShell>
+    );
+  }
 
   // org selector
   const [orgs, setOrgs] = useState<Org[]>([]);
@@ -99,15 +136,26 @@ export default function AdminSubmissionsPage() {
       try {
         const items = await adminJson<Org[]>("/api/admin/admin/organizations");
         if (!alive) return;
-        setOrgs(items.filter((o) => o.is_active));
+
+        const active = (items ?? []).filter((o) => o.is_active);
+        if (allowedOrgIds.length) {
+          const allowedSet = new Set(allowedOrgIds);
+          setOrgs(active.filter((o) => allowedSet.has(o.id)));
+        } else {
+          setOrgs(active);
+        }
       } catch {
-        const ids = Array.from(new Set(allowedLocations.map((l) => l.organization_id)));
-        const fallback = ids.map((id) => ({
+        const ids = allowedOrgIds.length
+          ? allowedOrgIds
+          : Array.from(new Set(allowedLocations.map((l) => Number(l.organization_id)).filter(Number.isFinite)));
+
+        const fallback = ids.map((id, idx) => ({
           id,
-          name: `Организация #${id}`,
+          name: `Организация ${idx + 1}`,
           slug: `org-${id}`,
           is_active: true,
         }));
+
         if (!alive) return;
         setOrgs(fallback);
       }
@@ -116,12 +164,21 @@ export default function AdminSubmissionsPage() {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [allowedOrgIds]);
 
   useEffect(() => {
-    if (orgId !== "") return;
-    if (orgs.length) setOrgId(orgs[0].id);
+    if (!orgs.length) {
+      setOrgId("");
+      return;
+    }
+
+    const ids = new Set(orgs.map((o) => o.id));
+    const cur = orgId === "" ? null : Number(orgId);
+
+    if (cur == null || !ids.has(cur)) {
+      setOffset(0);
+      setOrgId(orgs[0].id);
+    }
   }, [orgs, orgId]);
 
   useEffect(() => {
@@ -206,8 +263,8 @@ export default function AdminSubmissionsPage() {
         <GlassCard>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Admin</div>
-              <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Отзывы</h1>
+              <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Отзывы</div>
+                <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Отзывы гостей</h1>
 
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <div className="text-sm text-[color:var(--pg-muted)]">Организация:</div>
@@ -246,8 +303,8 @@ export default function AdminSubmissionsPage() {
                 </select>
 
                 {devEnabled && (
-                  <span className="font-mono text-xs text-[color:var(--pg-muted)]">
-                    org={orgId || "—"} loc={locationId || "—"}
+                  <span className="font-mono text-[11px] text-[color:var(--pg-faint)]">
+                    Организация #{orgId || "—"} • Локация #{locationId || "—"}
                   </span>
                 )}
               </div>
@@ -295,10 +352,14 @@ export default function AdminSubmissionsPage() {
               </div>
 
               {loading && <div className="mt-3 text-xs text-[color:var(--pg-faint)]">Загрузка…</div>}
-              {err && <div className="mt-3 whitespace-pre-wrap text-xs text-rose-300">{err}</div>}
+              {err && (
+                <div className="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/5 px-3 py-2 whitespace-pre-wrap text-xs text-rose-300">
+                  {err}
+                </div>
+              )}
               {!loading && locationId === "" && (
                 <div className="mt-3 text-xs text-[color:var(--pg-faint)]">
-                  Нет доступных локаций в выбранной организации.
+                  В выбранной организации пока нет доступных локаций.
                 </div>
               )}
             </div>
@@ -335,11 +396,18 @@ export default function AdminSubmissionsPage() {
                       {r.comment && r.comment.length > 120 ? "…" : ""}
                     </td>
                     <td className="px-4 py-3 text-[color:var(--pg-muted)]">
-                      {r.email || r.name ? `${r.name || "—"} • ${r.email || "—"}` : "—"}
+                      {r.email || r.name ? (
+                        <div className="space-y-1">
+                          <div>{r.name || "Имя не указано"}</div>
+                          <div className="text-[11px] text-[color:var(--pg-faint)]">{r.email || "Email не указан"}</div>
+                        </div>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Button variant="secondary" onClick={() => nav(`/admin/submissions/${r.id}`)}>
-                        Открыть
+                        Открыть отзыв
                       </Button>
                     </td>
                   </tr>
@@ -348,7 +416,7 @@ export default function AdminSubmissionsPage() {
                 {!loading && (data?.items?.length ?? 0) === 0 && (
                   <tr className="border-t border-[color:var(--pg-border)]">
                     <td className="px-4 py-6 text-[color:var(--pg-faint)]" colSpan={5}>
-                      Пока нет отзывов по выбранным фильтрам.
+                      По выбранным условиям отзывы пока не найдены.
                     </td>
                   </tr>
                 )}

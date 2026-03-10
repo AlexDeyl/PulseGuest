@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Lock, Mail } from "lucide-react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import GlassCard from "../components/GlassCard";
 import { Button } from "../components/ui/Button";
@@ -18,7 +18,25 @@ export default function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const { enabled: devEnabled } = useDevMode();
-  
+
+  const [flash, setFlash] = useState<string | null>(null);
+
+  useEffect(() => {
+    const p = new URLSearchParams(loc.search || "");
+    if (p.get("flash") === "pwd_updated") {
+      setFlash("Пароль обновлён");
+
+      const t = window.setTimeout(() => {
+        setFlash(null);
+        p.delete("flash");
+        const qs = p.toString();
+        nav(`${loc.pathname}${qs ? `?${qs}` : ""}`, { replace: true });
+      }, 2800);
+
+      return () => window.clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.search]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +56,12 @@ export default function AdminLoginPage() {
 
   return (
     <AppShell>
+      {flash && (
+        <div className="fixed right-4 top-4 z-50 rounded-2xl border border-[color:var(--pg-success-border)] bg-[color:var(--pg-success-bg-strong)] px-4 py-3 text-sm text-[color:var(--pg-success-text)] shadow-lg">
+          {flash}
+        </div>
+      )}
+
       <div className="mx-auto max-w-md">
         <motion.div
           initial={{ opacity: 0, y: 18 }}
@@ -101,12 +125,22 @@ export default function AdminLoginPage() {
                 {loading ? "Входим…" : "Войти"}
               </Button>
 
+              <div className="flex items-center justify-between">
+                <Link
+                  to="/admin/forgot-password"
+                  state={{ email: email.trim() }}
+                  className="text-xs text-[color:var(--pg-muted)] hover:text-[color:var(--pg-text)] underline underline-offset-4"
+                >
+                  Забыли пароль?
+                </Link>
+              </div>
+
               {devEnabled && (
                 <p className="text-xs text-[color:var(--pg-faint)]">
                   Dev: после входа идём в /admin и подтягиваем /api/admin/admin/me.
                 </p>
               )}
-              </form>
+            </form>
           </GlassCard>
         </motion.div>
       </div>

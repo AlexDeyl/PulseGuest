@@ -35,6 +35,12 @@ export type ResolveResponse = {
   active: ActiveSurvey | null;
   guest?: GuestContext | null;
   greeting: string;
+
+  // (PATCH C) optional: backend PATCH B может отдавать effective links
+  review_links?: {
+    yandex_url?: string;
+    twogis_url?: string;
+  } | null;
 };
 
 export type SubmissionPayload = {

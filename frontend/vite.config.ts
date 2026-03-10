@@ -8,6 +8,10 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+
+    // Разрешаем ngrok домены (Vite поддерживает ".domain" как wildcard для поддоменов)
+    allowedHosts: [".ngrok-free.dev"],
+
     proxy: {
       "/api": {
         target: proxyTarget,
