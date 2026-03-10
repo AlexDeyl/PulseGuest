@@ -31,6 +31,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isService = roleValues.includes("service_manager");
   const isAuditor = roleValues.includes("auditor");
   const isStatsOnlyAuditor = isAuditor && !isAdmin && !isOps && !isService;
+  const canSwitchDashboards = isStatsOnlyAuditor || isAdmin || isOps;
 
   const loc = useLocation();
   const nav = useNavigate();
@@ -155,7 +156,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             )}
 
             <div className="flex items-center gap-2">
-              {mode === "admin" && isStatsOnlyAuditor && (
+              {mode === "admin" && canSwitchDashboards && (
                 <div className="hidden items-center gap-2 sm:flex">
                   <button
                     type="button"
@@ -238,7 +239,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
-          {mode === "admin" && isStatsOnlyAuditor && (
+          {mode === "admin" && canSwitchDashboards && (
             <div className="mx-auto max-w-5xl px-4 pb-4 sm:hidden">
               <div className="grid grid-cols-2 gap-2">
                 <button
