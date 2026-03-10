@@ -5,6 +5,14 @@ import { adminJson, adminUploadJson, adminBlob } from "./adminApi";
 // change ONLY this constant.
 export const AUDIT_BASE = "/api/audit";
 
+export type AuditRunScore = {
+  score_sum: number;
+  score_max: number;
+  score_percent: number | null;
+  answered_scored: number;
+  total_scored_questions: number;
+};
+
 export type ChecklistTemplate = {
   id: number;
   organization_id: number | null;
@@ -53,10 +61,107 @@ export type ChecklistRunDetail = ChecklistRun & {
   questions: ChecklistRunQuestion[];
   answered_count: number;
   total_questions: number;
+  score?: AuditRunScore;
+};
+
+export type ChecklistRunListItem = {
+  location_name: string;
+  id: number;
+  organization_id: number;
+  location_id: number | null;
+  template_id: number;
+  template_name: string;
+  status: "draft" | "completed";
+  created_at: string | null;
+  completed_at: string | null;
+  answered_count: number;
+  total_questions: number;
+  score?: AuditRunScore;
+};
+
+export type AuditDashboardByOrganization = {
+  organization_id: number;
+  organization_name: string;
+  completed_runs: number;
+  avg_score_percent: number | null;
+  avg_score_sum: number | null;
+  avg_score_max: number | null;
+};
+
+export type AuditDashboardByGroup = {
+  group_key: string;
+  completed_runs: number;
+  avg_score_percent: number | null;
+  avg_score_sum: number | null;
+  avg_score_max: number | null;
+};
+
+export type AuditDashboardLocation = {
+  location_id: number;
+  location_name: string;
+  organization_id: number;
+  organization_name: string;
+  completed_runs: number;
+  avg_score_percent: number | null;
+};
+
+export type AuditDashboardWorstQuestion = {
+  question_id: number;
+  template_id: number;
+  template_name: string;
+  section: string;
+  text: string;
+  answers_count: number;
+  zero_count: number;
+  low_count: number;
+  low_rate: number | null;
+  avg_score: number | null;
+};
+
+export type AuditDashboardRecentCompleted = {
+  id: number;
+  organization_id: number;
+  organization_name: string;
+  location_id: number | null;
+  location_name: string | null;
+  template_id: number;
+  template_name: string;
+  completed_at: string | null;
+  score?: AuditRunScore;
+};
+
+export type AuditDashboardTrendPoint = {
+  period_key: string;
+  label: string;
+  bucket: "day" | "week" | string;
+  completed_runs: number;
+  problem_completed_runs: number;
+  avg_score_percent: number | null;
+};
+
+export type AuditDashboardSummary = {
+  period: {
+    date_from: string | null;
+    date_to: string | null;
+  };
+  total_runs: number;
+  completed_runs: number;
+  draft_runs: number;
+  avg_score_percent: number | null;
+  avg_score_sum: number | null;
+  avg_score_max: number | null;
+  problem_completed_runs: number;
+  by_organization: AuditDashboardByOrganization[];
+  by_group: AuditDashboardByGroup[];
+  best_locations: AuditDashboardLocation[];
+  worst_locations: AuditDashboardLocation[];
+  worst_questions: AuditDashboardWorstQuestion[];
+  recent_completed: AuditDashboardRecentCompleted[];
+  trends: AuditDashboardTrendPoint[];
 };
 
 export async function listChecklistTemplates() {
-  return adminJson<ChecklistTemplate[]>(`${AUDIT_BASE}/templates`);
+  return adminJson(`${AUDIT_BASE}/templates`);
 }
 
 export async function createChecklistRun(payload: {
@@ -64,7 +169,7 @@ export async function createChecklistRun(payload: {
   organization_id: number;
   location_id?: number | null;
 }) {
-  return adminJson<ChecklistRun>(`${AUDIT_BASE}/runs`, {
+  return adminJson(`${AUDIT_BASE}/runs`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -105,7 +210,9 @@ export async function uploadChecklistAttachment(params: {
   );
 }
 
-export async function downloadAttachmentBlob(attachmentId: number): Promise<Blob> {
+export async function downloadAttachmentBlob(
+  attachmentId: number
+): Promise<Blob> {
   const access = localStorage.getItem("pg_access_token") || "";
   const res = await fetch(`${API_BASE}${AUDIT_BASE}/attachments/${attachmentId}`, {
     headers: {
@@ -122,8 +229,6 @@ export async function downloadAttachmentBlob(attachmentId: number): Promise<Blob
   return await res.blob();
 }
 
-
-
 export async function downloadAuditImportTemplate(organizationId: number) {
   return adminBlob(`${AUDIT_BASE}/templates-import/template?organization_id=${organizationId}`);
 }
@@ -136,13 +241,11 @@ export async function importAuditTemplatesFromExcel(
   const fd = new FormData();
   fd.append("file", file);
   fd.append("group_value", groupValue ? String(groupValue) : "");
-
   const token =
     localStorage.getItem("pg_access_token") ||
     localStorage.getItem("access_token") ||
     localStorage.getItem("token") ||
     "";
-
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
@@ -157,7 +260,6 @@ export async function importAuditTemplatesFromExcel(
 
   const text = await res.text();
   let data: any = null;
-
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
@@ -172,23 +274,28 @@ export async function importAuditTemplatesFromExcel(
   return data;
 }
 
-export type ChecklistRunListItem = {
-  location_name: string;
-  id: number;
-  organization_id: number;
-  location_id: number | null;
-  template_id: number;
-  template_name: string;
-  status: "draft" | "completed";
-  created_at: string | null;
-  completed_at: string | null;
-  answered_count: number;
-  total_questions: number;
-};
-
 export async function listChecklistRuns(organizationId?: number) {
   const q = organizationId ? `?organization_id=${organizationId}` : "";
   return adminJson<ChecklistRunListItem[]>(`${AUDIT_BASE}/runs${q}`);
+}
+
+export async function getAuditDashboardSummary(params?: {
+  organizationId?: number | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.organizationId != null) {
+    qs.set("organization_id", String(params.organizationId));
+  }
+  if (params?.dateFrom) {
+    qs.set("date_from", params.dateFrom);
+  }
+  if (params?.dateTo) {
+    qs.set("date_to", params.dateTo);
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return adminJson<AuditDashboardSummary>(`${AUDIT_BASE}/dashboard/summary${suffix}`);
 }
 
 export async function completeChecklistRun(runId: number) {
