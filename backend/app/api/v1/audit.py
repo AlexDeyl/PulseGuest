@@ -37,6 +37,7 @@ from app.schemas.audit import (
     ChecklistTemplateCreateIn,
 )
 from app.services.rbac import require_roles
+from app.services.audit_scoring import calculate_run_score
 
 
 router = APIRouter()
@@ -297,6 +298,10 @@ async def get_run(
     answers = (await db.execute(select(ChecklistAnswer).where(ChecklistAnswer.run_id == run.id))).scalars().all()
     ans_by_q = {int(a.question_id): a for a in answers}
 
+    run_score = None
+    if str(run.status) == "completed":
+        run_score = calculate_run_score(questions=questions, answers=answers)
+
     atts = (await db.execute(select(ChecklistAttachment).where(ChecklistAttachment.run_id == run.id))).scalars().all()
     att_by_q: dict[int, list[ChecklistAttachment]] = {}
     for a in atts:
@@ -354,6 +359,7 @@ async def get_run(
         "questions": items,
         "answered_count": len(answers),
         "total_questions": len(questions),
+        **({"score": run_score} if run_score is not None else {}),
     }
 
 
