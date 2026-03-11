@@ -10,6 +10,7 @@ import {
   downloadChecklistRunPdf,
   downloadAttachmentBlob,
   getChecklistRun,
+  updateChecklistRunMeta,
   uploadChecklistAttachment,
   upsertChecklistAnswer,
 } from "../shared/auditApi";
@@ -102,9 +103,9 @@ export default function AdminAuditRunPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [uiMsg, setUiMsg] = useState<string | null>(null);
-
   const [activeQid, setActiveQid] = useState<number | null>(null);
-
+  const [runLocationText, setRunLocationText] = useState("");
+  const [savingRunMeta, setSavingRunMeta] = useState(false);
   const [draft, setDraft] = useState<Record<number, DraftAnswer>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [savedAt, setSavedAt] = useState<Record<number, string>>({});
@@ -124,6 +125,10 @@ export default function AdminAuditRunPage() {
   }, [draft]);
 
   const isReadOnly = data?.status === "completed";
+  const runLocationLabel =
+    String((data as any)?.location_text ?? "").trim() ||
+    String(runLocationText ?? "").trim() ||
+    "—";
 
   const pickUploadFile = (q: ChecklistRunQuestion, files: FileList | null | undefined) => {
     const f = files?.[0];
@@ -138,6 +143,7 @@ export default function AdminAuditRunPage() {
     try {
       const run = await getChecklistRun(rid);
       setData(run);
+      setRunLocationText(String((run as any)?.location_text || "").trim());
       // гарантируем что активный вопрос выбран
       if (run.questions?.length) {
         const exists = run.questions.find((q) => q.id === activeQid);
@@ -364,6 +370,50 @@ export default function AdminAuditRunPage() {
     }
   };
 
+  const saveRunMeta = async () => {
+    if (!data) return;
+    if (data.status !== "draft") return;
+
+    const nextValue = String(runLocationText || "").trim();
+
+    // не дёргаем backend без изменений
+    if (String(data.location_text || "") === nextValue) return;
+
+    try {
+      setSavingRunMeta(true);
+      const updated = await updateChecklistRunMeta(data.id, {
+        location_text: nextValue || null,
+      });
+
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              location_text: String(updated.location_text || "").trim() || null,
+              updated_at: updated.updated_at ?? prev.updated_at,
+            }
+          : prev
+      );
+
+      setRunLocationText(String(updated.location_text || ""));
+    } catch (e) {
+      setUiMsg(errToText(e, devEnabled));
+    } finally {
+      setSavingRunMeta(false);
+    }
+  };
+
+  const onRunLocationBlur = () => {
+    void saveRunMeta();
+  };
+
+  const onRunLocationKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void saveRunMeta();
+    }
+  };
+
   const onSend = async () => {
     if (!data) return;
     if (data.status !== "draft") return;
@@ -472,6 +522,9 @@ export default function AdminAuditRunPage() {
                 <span className="text-[color:var(--pg-text)]">
                   {answeredCount}/{questions.length}
                 </span>
+                <span className="mx-2 text-[color:var(--pg-faint)]">•</span>
+                Локация:{" "}
+                <span className="text-[color:var(--pg-text)]">{runLocationLabel}</span>
                 {data.completed_at ? (
                   <>
                     <span className="mx-2 text-[color:var(--pg-faint)]">•</span>
@@ -510,13 +563,43 @@ export default function AdminAuditRunPage() {
         </div>
       </div>
 
-      {isReadOnly && (
-        <GlassCard className="mb-6">
-          <div className="text-sm text-[color:var(--pg-muted)]">
-            Чек-лист завершён. Просмотр доступен только в режиме чтения.
-          </div>
-        </GlassCard>
-      )}
+      <GlassCard className="mb-6">
+        <div className="grid gap-3 md:grid-cols-[160px_1fr] md:items-center">
+          <div className="text-sm font-medium text-[color:var(--pg-text)]">Локация</div>
+
+          {isReadOnly ? (
+            <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-soft)] px-4 py-3 text-sm text-[color:var(--pg-text)]">
+              {String(data?.location_text || "").trim() || data?.location?.name || "—"}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={runLocationText}
+                onChange={(e) => setRunLocationText(e.target.value)}
+                onBlur={onRunLocationBlur}
+                onKeyDown={onRunLocationKeyDown}
+                placeholder='Например: номер 203, ресторан "Невесомость", лобби'
+                className="w-full rounded-2xl border border-[color:var(--pg-input-border)] bg-[color:var(--pg-input-bg)] px-4 py-3 text-sm text-[color:var(--pg-text)] outline-none"
+              />
+              <div className="text-xs text-[color:var(--pg-muted)]">
+                Свободное поле. Сохраняется в черновике и попадёт в завершенные проверки.
+                {savingRunMeta ? " Сохранение…" : ""}
+              </div>
+            </div>
+          )}
+        </div>
+      </GlassCard>
+
+      <>
+        {isReadOnly && (
+          <GlassCard className="mb-6">
+            <div className="text-sm text-[color:var(--pg-muted)]">
+              Чек-лист завершён. Просмотр доступен только в режиме чтения.
+            </div>
+          </GlassCard>
+        )}
+      </>
 
       {uiMsg && (
         <GlassCard className="mb-6">
