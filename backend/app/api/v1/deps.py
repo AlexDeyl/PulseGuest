@@ -29,23 +29,24 @@ FULL_GLOBAL_ROLE_VALUES: set[str] = {
     Role.admin.value,
     Role.director.value,      # legacy == admin-equivalent (до миграции)
     Role.super_admin.value,   # legacy
-    Role.auditor_global.value # legacy (исторически считалась глобальной)
+    Role.auditor.value,       # auditor теперь основной глобальный аудитор
 }
 
 # STATS_GLOBAL_ROLE_VALUES: может читать статистику по всем организациям.
 STATS_GLOBAL_ROLE_VALUES: set[str] = set(FULL_GLOBAL_ROLE_VALUES) | {Role.auditor.value}
 
 # Глобальные роли (видят все организации/локации). Добавили "admin" (строкой) для новой RBAC-модели.
-GLOBAL_ROLE_VALUES = {"super_admin", "director", "auditor_global", "admin"}
+GLOBAL_ROLE_VALUES = {"super_admin", "director", "admin", "auditor"}
 
 # Auditor по ТЗ читает статистику по всем организациям (write-запреты закрываем отдельными патчами)
-STATS_GLOBAL_ROLE_VALUES = set(GLOBAL_ROLE_VALUES) | {Role.auditor.value}
+ORG_WIDE_ROLE_VALUES = {Role.manager.value, "ops_director"}
 
 # org-wide: все локации в доступных организациях (добавили "ops_director" строкой для новой RBAC)
 ORG_WIDE_ROLE_VALUES = {Role.manager.value, Role.auditor.value, "ops_director"}
 
 # location-scoped (legacy)
 SCOPED_LOCATION_ROLE_VALUES = {Role.service_manager.value, Role.employee.value}
+
 
 async def get_db() -> AsyncSession:
     async for s in get_session():  # type: ignore

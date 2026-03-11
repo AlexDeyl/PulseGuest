@@ -377,9 +377,7 @@ async def create_run(
             raise HTTPException(status_code=403, detail="No access to this location")
 
     template = (
-        await db.execute(
-            select(ChecklistTemplate).where(ChecklistTemplate.id == int(payload.template_id))
-        )
+        await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id == int(payload.template_id)))
     ).scalar_one_or_none()
     if not template:
         raise HTTPException(status_code=404, detail="Checklist template not found")
@@ -393,8 +391,6 @@ async def create_run(
         status="draft",
     )
 
-    if hasattr(run, "started_at") and getattr(run, "started_at", None) is None:
-        run.started_at = _now_utc()  # type: ignore
     if hasattr(run, "updated_at"):
         run.updated_at = _now_utc()  # type: ignore
 
@@ -1003,7 +999,39 @@ async def get_dashboard_summary(
     }
 
 
+@router.patch("/runs/{run_id}")
+async def update_run_meta(
+    run_id: int,
+    payload: ChecklistRunMetaUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
+):
+    run = await _ensure_run_access(db=db, user=user, run_id=int(run_id))
 
+    if str(run.status) == "completed":
+        raise HTTPException(status_code=400, detail="Run is completed (read-only)")
+
+    run.location_text = (str(getattr(payload, "location_text", "") or "").strip() or None)
+
+    if hasattr(run, "updated_at"):
+        run.updated_at = _now_utc()  # type: ignore
+
+    await db.commit()
+    await db.refresh(run)
+
+    return {
+        "id": int(run.id),
+        "template_id": int(run.template_id),
+        "organization_id": int(run.organization_id),
+        "location_id": int(run.location_id) if getattr(run, "location_id", None) else None,
+        "location_text": (str(getattr(run, "location_text", "") or "").strip() or None),
+        "auditor_user_id": int(run.auditor_user_id),
+        "status": str(run.status),
+        "started_at": _dt_iso(getattr(run, "started_at", None)),
+        "updated_at": _dt_iso(getattr(run, "updated_at", None)),
+        "completed_at": _dt_iso(getattr(run, "completed_at", None)),
+    }
 
 
 @router.post("/runs/{run_id}/complete")
@@ -1476,7 +1504,7 @@ async def get_run_detail(
         "template_id": run.template_id,
         "organization_id": run.organization_id,
         "location_id": run.location_id,
-        "location_text": (location_label or None),
+        "location_text": (str(getattr(run, "location_text", "") or "").strip() or None),
         "auditor_user_id": run.auditor_user_id,
         "status": run.status,
         "started_at": _dt_iso(getattr(run, "started_at", None)),

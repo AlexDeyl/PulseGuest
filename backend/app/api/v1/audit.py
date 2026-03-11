@@ -33,6 +33,7 @@ from app.models.user import User
 from app.schemas.audit import (
     ChecklistAnswerUpsertIn,
     ChecklistRunCreateIn,
+    ChecklistRunMetaUpdateIn,
     ChecklistTemplateCreateIn,
 )
 from app.services.rbac import require_roles
@@ -109,11 +110,9 @@ async def _assert_run_read_access(db: AsyncSession, user: User, run: ChecklistRu
 
     # Полный read-access
     is_full_reader = await user_has_any_role(
-        db,
-        user,
-        {
+        db, user, {
             Role.admin.value,
-            Role.auditor_global.value,
+            Role.auditor.value,
             "super_admin",
         },
     )
@@ -127,9 +126,7 @@ async def _assert_run_read_access(db: AsyncSession, user: User, run: ChecklistRu
         return
 
     # Обычный auditor — только свои
-    is_auditor = await user_has_any_role(db, user, {Role.auditor.value})
-    if is_auditor and run.auditor_user_id == user.id:
-        return
+    # auditor теперь имеет глобальный read-access, отдельная ветка больше не нужна
 
     raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -149,9 +146,7 @@ async def _assert_run_write_access(db: AsyncSession, user: User, run: ChecklistR
         raise HTTPException(status_code=403, detail="No access to this organization")
 
     is_extended_writer = await user_has_any_role(
-        db,
-        user,
-        {Role.admin.value, Role.auditor_global.value, "super_admin"},
+        db, user, {Role.admin.value, Role.auditor.value, "super_admin"},
     )
     if is_extended_writer:
         return
@@ -169,7 +164,6 @@ async def list_templates(
      _user=Depends(
         require_roles(
             Role.auditor,
-            Role.auditor_global,
             Role.ops_director,
             Role.director,
             Role.admin,
@@ -210,7 +204,7 @@ async def list_templates(
 async def create_template(
     payload: ChecklistTemplateCreateIn,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor_global, Role.admin, Role.super_admin)),
+    _user=Depends(require_roles(Role.auditor, Role.admin, Role.super_admin)),
     user: User = Depends(get_current_user),
 ):
     # helper endpoint до PATCH 5 (импорт Excel)
@@ -269,7 +263,7 @@ async def create_template(
 async def create_run(
     payload: ChecklistRunCreateIn,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
+    _user=Depends(require_roles(Role.auditor, Role.admin, Role.super_admin)),
     user: User = Depends(get_current_user),
 ):
     allowed_org_ids = set(await get_allowed_organization_ids(db=db, user=user))
@@ -322,10 +316,13 @@ async def create_run(
 
     effective_location_id = None if scope in {"organization", "group"} else (int(location_id) if location_id is not None else None)
 
+    normalized_location_text = (payload.location_text or "").strip() or None
+
     run = ChecklistRun(
         template_id=template.id,
         organization_id=int(payload.organization_id),
         location_id=effective_location_id,
+        location_text=normalized_location_text,
         auditor_user_id=user.id,
         status="draft",
     )
@@ -338,6 +335,7 @@ async def create_run(
         "template_id": run.template_id,
         "organization_id": run.organization_id,
         "location_id": run.location_id,
+        "location_text": run.location_text,
         "auditor_user_id": run.auditor_user_id,
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
@@ -424,6 +422,7 @@ async def get_run(
         "template_id": run.template_id,
         "organization_id": run.organization_id,
         "location_id": run.location_id,
+        "location_text": run.location_text,
         "auditor_user_id": run.auditor_user_id,
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
@@ -443,6 +442,40 @@ async def get_run(
         "answered_count": len(answers),
         "total_questions": len(questions),
         **({"score": run_score} if run_score is not None else {}),
+    }
+
+
+@router.patch("/runs/{run_id}")
+async def update_run_meta(
+    run_id: int,
+    payload: ChecklistRunMetaUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
+    user: User = Depends(get_current_user),
+):
+    run = (
+        await db.execute(select(ChecklistRun).where(ChecklistRun.id == int(run_id)))
+    ).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    await _assert_run_write_access(db=db, user=user, run=run)
+
+    run.location_text = (payload.location_text or "").strip() or None
+    await db.commit()
+    await db.refresh(run)
+
+    return {
+        "id": run.id,
+        "template_id": run.template_id,
+        "organization_id": run.organization_id,
+        "location_id": run.location_id,
+        "location_text": run.location_text,
+        "auditor_user_id": run.auditor_user_id,
+        "status": run.status,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
     }
 
 

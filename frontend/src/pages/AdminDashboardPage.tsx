@@ -480,7 +480,10 @@ export default function AdminDashboardPage() {
 
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-[color:var(--pg-muted)]">
                 <span>
-                  Вы вошли как <span className="text-[color:var(--pg-text)]">{me?.email}</span>
+                  Вы вошли как{" "}
+                  <span className="text-[color:var(--pg-text)]">
+                    {String(me?.name || me?.full_name || me?.username || "").trim() || me?.email || "—"}
+                  </span>
                 </span>
                 <span className="text-[color:var(--pg-faint)]">•</span>
                 <span>
