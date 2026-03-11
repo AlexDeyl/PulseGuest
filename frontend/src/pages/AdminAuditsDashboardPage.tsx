@@ -206,7 +206,7 @@ function normalizeSummary(data: AuditDashboardSummary | null): AuditDashboardSum
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/70">
+    <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-soft)] px-4 py-6 text-sm text-[color:var(--pg-text-muted)]">
       {text}
     </div>
   );
@@ -215,7 +215,7 @@ function EmptyState({ text }: { text: string }) {
 function SectionTable({ title, children }: { title: string; children: ReactNode }) {
   return (
     <GlassCard className="p-5">
-      <h3 className="mb-4 text-lg font-semibold text-white">{title}</h3>
+      <h3 className="mb-4 text-lg font-semibold text-[color:var(--pg-text)]">{title}</h3>
       {children}
     </GlassCard>
   );
@@ -241,12 +241,12 @@ function MiniBarChart({
           <div key={`${item.label}_${item.value}`} className="space-y-1">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-white">{item.label}</div>
+                <div className="truncate text-sm font-medium text-[color:var(--pg-text)]">{item.label}</div>
                 {item.sublabel ? (
-                  <div className="text-xs text-white/60">{item.sublabel}</div>
+                  <div className="text-xs text-[color:var(--pg-text-muted)]">{item.sublabel}</div>
                 ) : null}
               </div>
-              <div className="text-sm font-semibold" style={{ color: tone.text }}>
+              <div className="text-sm font-semibold text-[color:var(--pg-text)]">
                 {item.value}
               </div>
             </div>
@@ -278,26 +278,29 @@ function PercentBars({
     <div className="space-y-4">
       {items.map((item) => {
         const safe = clampPercent(item.value);
-        const fillColor = percentColor(item.value);
-        const textColor = percentTextColor(item.value);
 
         return (
           <div key={`${item.label}_${safe}`} className="space-y-1">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-white">{item.label}</div>
+                <div className="truncate text-sm font-medium text-[color:var(--pg-text)]">{item.label}</div>
                 {item.sublabel ? (
-                  <div className="text-xs text-white/60">{item.sublabel}</div>
+                  <div className="text-xs text-[color:var(--pg-text-muted)]">{item.sublabel}</div>
                 ) : null}
               </div>
-              <div className="text-sm font-semibold" style={{ color: textColor }}>
+              <div className="text-sm font-semibold text-[color:var(--pg-text)]">
                 {item.value == null ? "—" : `${safe}%`}
               </div>
             </div>
             <div className="h-2 rounded-full bg-white/10">
               <div
                 className="h-2 rounded-full transition-all"
-                style={{ width: `${safe}%`, background: fillColor }}
+                style={{
+                  width: `${safe}%`,
+                  background: "var(--pg-gradient)",
+                  backgroundSize: "160% 100%",
+                  backgroundPosition: "left center",
+                }}
               />
             </div>
           </div>
@@ -338,15 +341,18 @@ function HeatList({
         const level = problemLevel(item.intensity);
 
         return (
-          <div key={item.key} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div
+              key={item.key}
+              className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-soft)] p-4"
+            >
             <div className="mb-2 flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="text-sm font-medium text-white">{item.title}</div>
+                <div className="text-sm font-medium text-[color:var(--pg-text)]">{item.title}</div>
                 {item.subtitle ? (
-                  <div className="mt-1 text-xs text-white/60">{item.subtitle}</div>
+                  <div className="mt-1 text-xs text-[color:var(--pg-text-muted)]">{item.subtitle}</div>
                 ) : null}
               </div>
-              <div className="shrink-0 text-sm font-semibold text-white">{safe}%</div>
+              <div className="shrink-0 text-sm font-semibold text-[color:var(--pg-text)]">{safe}%</div>
             </div>
 
             <div className="mb-2 h-2 rounded-full bg-white/10">
@@ -357,10 +363,10 @@ function HeatList({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full bg-white/10 px-2 py-1 text-white/85">
+              <span className="rounded-full bg-[color:var(--pg-soft)] px-2 py-1 text-[color:var(--pg-text)]">
                 {level.label}
               </span>
-              <span className="text-white/60">{item.problemText || level.hint}</span>
+              <span className="text-[color:var(--pg-text-muted)]">{item.problemText || level.hint}</span>
             </div>
           </div>
         );
@@ -399,32 +405,32 @@ function TrendLineChart({
 
   return (
     <GlassCard className="p-5">
-      <div className="mb-1 flex items-center gap-2 text-white">
+      <div className="mb-1 flex items-center gap-2 text-[color:var(--pg-text)]">
         <TrendingUp className="h-5 w-5" />
         <h3 className="text-lg font-semibold">{title}</h3>
       </div>
-      <p className="mb-2 text-sm text-white/70">{subtitle}</p>
-      <p className="mb-4 text-xs text-white/50">
+      <p className="mb-2 text-sm text-[color:var(--pg-text-muted)]">{subtitle}</p>
+      <p className="mb-4 text-xs text-[color:var(--pg-text-muted)]">
         {points[0]?.bucket === "week" ? "По неделям" : "По дням"} · {niceTrendText(chartPoints)}
       </p>
 
       <div className="space-y-3">
         {chartPoints.map((p) => {
           const percent = clampPercent(p.avg_score_percent ?? 0);
-          const fillColor = percentColor(percent);
-          const textColor = percentTextColor(percent);
           return (
             <div key={p.period_key} className="space-y-1">
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="text-white/80">{p.label}</span>
-                <span className="font-medium" style={{ color: textColor }}>
-                  {percent}% · проблемных: {Number(p.problem_completed_runs || 0)}
-                </span>
+              <div className="text-sm font-semibold text-[color:var(--pg-text)]">
+                {p.label} {percent}% · проблемных: {Number(p.problem_completed_runs || 0)}
               </div>
-                <div className="h-2 rounded-full bg-white/10">
+                <div className="h-2 rounded-full bg-white/[0.08] shadow-[inset_0_1px_2px_rgba(0,0,0,0.22)]">
                   <div
                     className="h-2 rounded-full transition-all"
-                    style={{ width: `${percent}%`, background: fillColor }}
+                    style={{
+                      width: `${percent}%`,
+                      background: "var(--pg-gradient)",
+                      backgroundSize: "160% 100%",
+                      backgroundPosition: "left center",
+                    }}
                   />
                 </div>
             </div>
@@ -448,40 +454,54 @@ function TrendBarsChart({
     return <EmptyState text="Для динамики по количеству пока недостаточно данных." />;
   }
 
+  const chartHeight = 120;
   const max = Math.max(1, ...points.map((p) => Number(p.completed_runs || 0)));
 
   return (
     <GlassCard className="p-5">
-      <div className="mb-1 flex items-center gap-2 text-white">
+      <div className="mb-1 flex items-center gap-2 text-[color:var(--pg-text)]">
         <BarChart3 className="h-5 w-5" />
         <h3 className="text-lg font-semibold">{title}</h3>
       </div>
-      <p className="mb-2 text-sm text-white/70">{subtitle}</p>
-      <p className="mb-4 text-xs text-white/50">
+      <p className="mb-2 text-sm text-[color:var(--pg-text-muted)]">{subtitle}</p>
+      <p className="mb-4 text-xs text-[color:var(--pg-text-muted)]">
         {points[0]?.bucket === "week" ? "По неделям" : "По дням"}
       </p>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
         {points.map((p) => {
-          const ratio = Number(p.completed_runs || 0) / max;
-          const height = Math.max(10, Math.round(ratio * 120));
-          const tone = volumeTone(ratio);
+          const value = Number(p.completed_runs || 0);
+          const ratio = value / max;
+          const fillHeight = Math.max(10, Math.round(ratio * chartHeight));
 
           return (
-            <div
-              key={p.period_key}
-              className="flex min-h-[170px] flex-col items-center justify-end rounded-2xl border bg-white/5 p-3"
-              style={{ borderColor: tone.border, boxShadow: tone.glow }}
-            >
+            <div key={p.label} className="flex flex-col items-center gap-2">
               <div
-                className="w-full rounded-t-xl transition-all"
-                style={{ height: `${height}px`, background: tone.solid }}
-                title={`${p.label}: ${p.completed_runs}`}
-              />
-              <div className="mt-2 text-sm font-semibold" style={{ color: tone.text }}>
-                {p.completed_runs}
+                className="relative flex w-14 items-end justify-center overflow-hidden rounded-2xl"
+                style={{ height: `${chartHeight}px` }}
+              >
+                <div
+                  className="absolute inset-x-0 bottom-0 overflow-hidden rounded-2xl"
+                  style={{ height: `${fillHeight}px` }}
+                >
+                  <div
+                      className="absolute inset-x-0 bottom-0 rounded-2xl"
+                      style={{
+                        height: `${chartHeight}px`,
+                        background:
+                          "linear-gradient(to top, rgba(99, 102, 241, 0.92) 0%, rgba(236, 72, 153, 0.92) 52%, rgba(16, 185, 129, 0.92) 100%)",
+                      }}
+                    />
+                </div>
+                <span
+                  className="relative z-[1] pb-2 text-sm font-semibold text-[color:var(--pg-on-primary)]"
+                  style={{ textShadow: "0 1px 2px rgba(0,0,0,0.22)" }}
+                >
+                  {value}
+                </span>
               </div>
-              <div className="mt-1 text-center text-xs text-white/60">{p.label}</div>
+
+              <div className="text-xs font-medium text-[color:var(--pg-text-muted)]">{p.label}</div>
             </div>
           );
         })}
@@ -506,11 +526,11 @@ function KpiCard({
   return (
     <GlassCard className="p-5">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="text-white/80">{icon}</div>
-        <div className="text-right text-2xl font-semibold text-white">{value}</div>
+        <div className="text-[color:var(--pg-text-muted)]">{icon}</div>
+        <div className="text-right text-2xl font-semibold text-[color:var(--pg-text)]">{value}</div>
       </div>
-      <div className="text-sm font-medium text-white">{title}</div>
-      <div className="mt-1 text-xs text-white/60">{subtitle}</div>
+      <div className="text-sm font-medium text-[color:var(--pg-text)]">{title}</div>
+      <div className="mt-1 text-xs text-[color:var(--pg-text-muted)]">{subtitle}</div>
       {extra ? <div className="mt-3">{extra}</div> : null}
     </GlassCard>
   );
@@ -693,31 +713,23 @@ export default function AdminAuditsDashboardPage() {
       return {
         label: "Нет данных",
         width: 0,
-        color: percentColor(0),
-        textColor: percentTextColor(0),
       };
     }
     if (avg >= 85) {
       return {
         label: "Сильный результат",
         width: Math.round(avg),
-        color: percentColor(avg),
-        textColor: percentTextColor(avg),
       };
     }
     if (avg >= 70) {
       return {
         label: "Стабильно",
         width: Math.round(avg),
-        color: percentColor(avg),
-        textColor: percentTextColor(avg),
       };
     }
     return {
       label: "Нужны улучшения",
       width: Math.round(avg),
-      color: percentColor(avg),
-      textColor: percentTextColor(avg),
     };
   }, [summary?.avg_score_percent]);
 
@@ -757,31 +769,31 @@ export default function AdminAuditsDashboardPage() {
         <GlassCard className="p-6">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-3xl">
-              <div className="mb-3 flex flex-wrap items-center gap-2 text-white/70">
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-[color:var(--pg-text-muted)]">
                 <div className="flex items-center gap-2">
                   <ClipboardList className="h-5 w-5" />
                   <span className="text-sm">Дашборд аудиторов</span>
                 </div>
-                <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white/80">
+                <span className="rounded-full bg-[color:var(--pg-soft)] px-3 py-1 text-xs text-[color:var(--pg-text)]">
                   {selectedOrgLabel}
                 </span>
               </div>
 
-              <h1 className="text-2xl font-semibold text-white">Аналитика по чек-листам</h1>
+              <h1 className="text-2xl font-semibold text-[color:var(--pg-text)]">Аналитика по чек-листам</h1>
 
-              <p className="mt-2 text-sm leading-6 text-white/70">
+              <p className="mt-2 text-sm leading-6 text-[color:var(--pg-text-muted)]">
                 Сводка по завершённым проверкам: результаты, проблемные зоны, последние проверки и
                 динамика качества прохождения чек-листов.
               </p>
 
-              <div className="mt-3 text-xs text-white/50">
+              <div className="mt-3 text-xs text-[color:var(--pg-text-muted)]">
                 Показываем только доступные вам организации, локации и завершённые проверки в рамках прав доступа.
               </div>
             </div>
 
             <div className="flex w-full max-w-[560px] flex-col gap-3 md:self-start">
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div className="mb-2 text-sm text-white/70">Организация</div>
+              <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-soft)] p-3">
+                <div className="mb-2 text-sm text-[color:var(--pg-text-muted)]">Организация</div>
                 <Select
                   value={orgFilter}
                   onValueChange={(value) => setOrgFilter(value)}
@@ -789,8 +801,8 @@ export default function AdminAuditsDashboardPage() {
                 />
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div className="mb-2 text-sm text-white/70">Быстрые действия</div>
+              <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-soft)] p-3">
+                <div className="mb-2 text-sm text-[color:var(--pg-text-muted)]">Быстрые действия</div>
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={() => void refreshSummary()} disabled={loading}>
                     {loading ? "Обновляю…" : "Обновить"}
@@ -856,12 +868,17 @@ export default function AdminAuditsDashboardPage() {
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs text-white/60">
                   <span>{scoreHealth.label}</span>
-                  <span style={{ color: scoreHealth.textColor }}>{fmtPercent(summary?.avg_score_percent)}</span>
+                  <span className="text-[color:var(--pg-text)]">{fmtPercent(summary?.avg_score_percent)}</span>
                 </div>
-                <div className="h-2 rounded-full bg-white/10">
+                <div className="h-2 rounded-full bg-white/[0.08] shadow-[inset_0_1px_2px_rgba(0,0,0,0.22)]">
                   <div
                     className="h-2 rounded-full transition-all"
-                    style={{ width: `${scoreHealth.width}%`, background: scoreHealth.color }}
+                    style={{
+                      width: `${scoreHealth.width}%`,
+                      background: "var(--pg-gradient)",
+                      backgroundSize: "160% 100%",
+                      backgroundPosition: "left center",
+                    }}
                   />
                 </div>
               </div>
@@ -895,9 +912,9 @@ export default function AdminAuditsDashboardPage() {
               <EmptyState text="По выбранной области пока нет завершённых проверок по организациям." />
             ) : (
               <div className="overflow-x-auto">
-                <table className="min-w-full text-left text-sm text-white/85">
-                  <thead className="text-white/55">
-                    <tr className="border-b border-white/10">
+                <table className="min-w-full text-left text-sm text-[color:var(--pg-text)]">
+                  <thead className="text-[color:var(--pg-text-muted)]">
+                    <tr className="border-b border-[color:var(--pg-border)]">
                       <th className="py-2 pr-4 font-medium">Организация</th>
                       <th className="py-2 pr-4 font-medium">Завершено</th>
                       <th className="py-2 pr-4 font-medium">Средний %</th>
@@ -906,7 +923,7 @@ export default function AdminAuditsDashboardPage() {
                   </thead>
                   <tbody>
                     {byOrganization.map((item: AuditDashboardByOrganization) => (
-                      <tr key={item.organization_id} className="border-b border-white/5">
+                      <tr key={item.organization_id} className="border-b border-[color:var(--pg-border)]">
                         <td className="py-3 pr-4">{item.organization_name}</td>
                         <td className="py-3 pr-4">{item.completed_runs}</td>
                         <td className="py-3 pr-4">{fmtPercent(item.avg_score_percent)}</td>
@@ -926,8 +943,8 @@ export default function AdminAuditsDashboardPage() {
               <EmptyState text="По группам локаций пока недостаточно данных." />
             ) : (
               <div className="overflow-x-auto">
-                <table className="min-w-full text-left text-sm text-white/85">
-                  <thead className="text-white/55">
+                <table className="min-w-full text-left text-sm text-[color:var(--pg-text)]">
+                  <thead className="text-[color:var(--pg-text-muted)]">
                     <tr className="border-b border-white/10">
                       <th className="py-2 pr-4 font-medium">Группа</th>
                       <th className="py-2 pr-4 font-medium">Завершено</th>
@@ -937,7 +954,7 @@ export default function AdminAuditsDashboardPage() {
                   </thead>
                   <tbody>
                     {byGroup.map((item: AuditDashboardByGroup) => (
-                      <tr key={item.group_key} className="border-b border-white/5">
+                      <tr key={item.group_key} className="border-b border-[color:var(--pg-border)]">
                         <td className="py-3 pr-4">{fmtGroupName(item.group_key)}</td>
                         <td className="py-3 pr-4">{item.completed_runs}</td>
                         <td className="py-3 pr-4">{fmtPercent(item.avg_score_percent)}</td>
@@ -993,14 +1010,14 @@ export default function AdminAuditsDashboardPage() {
               {recentCompleted.map((item: AuditDashboardRecentCompleted) => (
                 <div
                   key={item.id}
-                  className="rounded-2xl border border-white/10 bg-white/5 p-4"
+                  className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-soft)] p-4"
                 >
                   <div className="mb-2 flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-white">
+                      <div className="text-sm font-medium text-[color:var(--pg-text)]">
                         {item.organization_name} · {item.location_name || item.template_name}
                       </div>
-                      <div className="mt-1 text-xs text-white/60">{item.template_name}</div>
+                      <div className="mt-1 text-xs text-[color:var(--pg-text-muted)]">{item.template_name}</div>
                     </div>
                     <div
                       className="shrink-0 rounded-full px-2 py-1 text-xs font-medium"
@@ -1010,11 +1027,11 @@ export default function AdminAuditsDashboardPage() {
                     </div>
                   </div>
 
-                  <div className="mb-3 text-xs text-white/60">
+                  <div className="mb-3 text-xs text-[color:var(--pg-text-muted)]">
                     Завершён: {fmtDateTime(item.completed_at)}
                   </div>
 
-                  <div className="mb-4 text-sm text-white/80">
+                  <div className="mb-4 text-sm text-[color:var(--pg-text)]">
                     Балл: {fmtScorePair(item.score?.score_sum ?? null, item.score?.score_max ?? null)}
                   </div>
 
