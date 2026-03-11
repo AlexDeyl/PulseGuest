@@ -574,14 +574,18 @@ export default function AdminAuditRunPage() {
           ) : (
             <div className="space-y-2">
               <input
-                type="text"
-                value={runLocationText}
-                onChange={(e) => setRunLocationText(e.target.value)}
-                onBlur={onRunLocationBlur}
-                onKeyDown={onRunLocationKeyDown}
-                placeholder='Например: номер 203, ресторан "Невесомость", лобби'
-                className="w-full rounded-2xl border border-[color:var(--pg-input-border)] bg-[color:var(--pg-input-bg)] px-4 py-3 text-sm text-[color:var(--pg-text)] outline-none"
-              />
+                  type="text"
+                  value={runLocationText}
+                  onChange={(e) => setRunLocationText(e.target.value)}
+                  onBlur={() => void saveRunMeta()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveRunMeta();
+                    }
+                  }}
+                  placeholder='Например: номер 203, ресторан "Невесомость", лобби'
+                />
               <div className="text-xs text-[color:var(--pg-muted)]">
                 Свободное поле. Сохраняется в черновике и попадёт в завершенные проверки.
                 {savingRunMeta ? " Сохранение…" : ""}
