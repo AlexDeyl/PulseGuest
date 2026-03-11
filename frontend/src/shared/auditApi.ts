@@ -29,6 +29,7 @@ export type ChecklistRun = {
   template_id: number;
   organization_id: number;
   location_id: number | null;
+  location_text?: string | null;
   auditor_user_id: number;
   status: "draft" | "completed" | string;
   started_at: string;
@@ -168,6 +169,7 @@ export async function createChecklistRun(payload: {
   template_id: number;
   organization_id: number;
   location_id?: number | null;
+  location_text?: string | null;
 }) {
   return adminJson(`${AUDIT_BASE}/runs`, {
     method: "POST",
@@ -177,6 +179,16 @@ export async function createChecklistRun(payload: {
 
 export async function getChecklistRun(runId: number) {
   return adminJson<ChecklistRunDetail>(`${AUDIT_BASE}/runs/${runId}`);
+}
+
+export async function updateChecklistRunMeta(
+  runId: number,
+  payload: { location_text?: string | null }
+) {
+  return adminJson<ChecklistRunDetail>(`${AUDIT_BASE}/runs/${runId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function upsertChecklistAnswer(params: {

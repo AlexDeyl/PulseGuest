@@ -48,6 +48,11 @@ class ChecklistRunCreateIn(BaseModel):
     template_id: int
     organization_id: int
     location_id: Optional[int] = None
+    location_text: Optional[str] = None
+
+
+class ChecklistRunMetaUpdateIn(BaseModel):
+    location_text: Optional[str] = None
 
 
 class ChecklistAnswerUpsertIn(BaseModel):
@@ -68,6 +73,7 @@ class ChecklistRunOut(BaseModel):
     template_id: int
     organization_id: int
     location_id: Optional[int] = None
+    location_text: Optional[str] = None
     auditor_user_id: int
     status: str
     started_at: datetime

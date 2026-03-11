@@ -32,6 +32,7 @@ from app.models.audit_checklist import (  # type: ignore
     ChecklistRun,
     ChecklistTemplate,
 )
+from app.schemas.audit import ChecklistRunCreateIn, ChecklistRunMetaUpdateIn
 from app.models.role import Role
 from app.models.user import User
 from app.services.audit_scoring import (
@@ -65,6 +66,15 @@ def _dt_iso(dt: Any) -> str | None:
         return dt.isoformat()
     except Exception:
         return str(dt)
+
+
+def _run_status_label(status: Any) -> str:
+    s = str(status or "").strip().lower()
+    if s == "completed":
+        return "Завершен"
+    if s == "draft":
+        return "Черновик"
+    return str(status or "—")
 
 
 def _register_pdf_font() -> str:
@@ -350,6 +360,66 @@ def _choose_trend_bucket(
     return "day"
 
 
+@router.post("/runs")
+async def create_run(
+    payload: ChecklistRunCreateIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _=Depends(require_roles(Role.auditor, Role.auditor_global, Role.admin, Role.super_admin)),
+):
+    allowed_orgs = set(int(x) for x in (await get_allowed_organization_ids(db=db, user=user)))
+    if int(payload.organization_id) not in allowed_orgs:
+        raise HTTPException(status_code=403, detail="No access to this organization")
+
+    if payload.location_id is not None:
+        allowed_locs = set(int(x) for x in (await get_allowed_location_ids(db=db, user=user)))
+        if allowed_locs and int(payload.location_id) not in allowed_locs:
+            raise HTTPException(status_code=403, detail="No access to this location")
+
+    template = (
+        await db.execute(
+            select(ChecklistTemplate).where(ChecklistTemplate.id == int(payload.template_id))
+        )
+    ).scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Checklist template not found")
+
+    run = ChecklistRun(
+        template_id=int(payload.template_id),
+        organization_id=int(payload.organization_id),
+        location_id=int(payload.location_id) if payload.location_id is not None else None,
+        location_text=(str(getattr(payload, "location_text", "") or "").strip() or None),
+        auditor_user_id=int(user.id),
+        status="draft",
+    )
+
+    if hasattr(run, "started_at") and getattr(run, "started_at", None) is None:
+        run.started_at = _now_utc()  # type: ignore
+    if hasattr(run, "updated_at"):
+        run.updated_at = _now_utc()  # type: ignore
+
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+
+    answered_count, total_questions = await _calc_progress(db=db, run=run)
+
+    return {
+        "id": int(run.id),
+        "template_id": int(run.template_id),
+        "organization_id": int(run.organization_id),
+        "location_id": int(run.location_id) if getattr(run, "location_id", None) else None,
+        "location_text": (str(getattr(run, "location_text", "") or "").strip() or None),
+        "auditor_user_id": int(run.auditor_user_id),
+        "status": str(run.status),
+        "started_at": _dt_iso(getattr(run, "started_at", None)),
+        "updated_at": _dt_iso(getattr(run, "updated_at", None)),
+        "completed_at": _dt_iso(getattr(run, "completed_at", None)),
+        "answered_count": int(answered_count),
+        "total_questions": int(total_questions),
+    }
+
+
 @router.get("/runs")
 async def list_my_runs(
     organization_id: int | None = Query(default=None),
@@ -451,6 +521,7 @@ async def list_my_runs(
                 "organization_name": str(organization_name) if organization_name else None,
                 "location_id": int(run.location_id) if getattr(run, "location_id", None) else None,
                 "location_name": str(location_name) if location_name else None,
+                "location_text": (str(getattr(run, "location_text", "") or "").strip() or None),
                 "template_id": int(run.template_id),
                 "template_name": str(template_name),
                 "status": str(run.status),
@@ -932,6 +1003,9 @@ async def get_dashboard_summary(
     }
 
 
+
+
+
 @router.post("/runs/{run_id}/complete")
 async def complete_run(
     run_id: int,
@@ -1114,7 +1188,7 @@ async def run_pdf(
             answer_text = ""
 
         return answer_text, score_text
-    
+
     def _pdf_text(value: Any) -> str:
         s = str(value or "").strip()
         s = (
@@ -1153,6 +1227,12 @@ async def run_pdf(
                 select(Location.name).where(Location.id == int(run.location_id))
             )
         ).scalar_one_or_none()
+
+    location_label = (
+        str(getattr(run, "location_text", "") or "").strip()
+        or str(loc_name or "").strip()
+        or ""
+    )
 
     qs = (
         await db.execute(
@@ -1217,11 +1297,11 @@ async def run_pdf(
     title = f"{getattr(tmpl, 'name', 'Checklist')} — отчет"
     logger.warning("PDF generation font in use: %s", pdf_font_name)
     meta_lines = [
-        "Статус: completed",
+        f"Статус: {_run_status_label(run.status)}",
         f"Организация: {org_name or ''}",
-        f"Локация: {loc_name or ''}",
+        f"Локация: {location_label}",
         f"Дата: {run.completed_at.strftime('%d.%m.%Y %H:%M') if getattr(run, 'completed_at', None) else ''}",
-        f"Run ID: {run.id}",
+        f"Чек-лист № {run.id}",
     ]
 
     story = [
@@ -1331,6 +1411,8 @@ async def get_run_detail(
         await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id == run.template_id))
     ).scalar_one()
 
+    location_label = str(getattr(run, "location_text", "") or "").strip()
+
     questions = (
         await db.execute(
             select(ChecklistQuestion)
@@ -1394,6 +1476,7 @@ async def get_run_detail(
         "template_id": run.template_id,
         "organization_id": run.organization_id,
         "location_id": run.location_id,
+        "location_text": (location_label or None),
         "auditor_user_id": run.auditor_user_id,
         "status": run.status,
         "started_at": _dt_iso(getattr(run, "started_at", None)),

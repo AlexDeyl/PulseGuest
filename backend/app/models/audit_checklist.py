@@ -105,35 +105,26 @@ class ChecklistQuestion(Base):
 
 class ChecklistRun(Base):
     """A single checklist fill session (draft -> completed)."""
-
     __tablename__ = "checklist_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-
     template_id: Mapped[int] = mapped_column(
-        ForeignKey("checklist_templates.id", ondelete="RESTRICT"),
-        index=True,
-        nullable=False,
+        ForeignKey("checklist_templates.id", ondelete="RESTRICT"), index=True, nullable=False,
     )
-
     organization_id: Mapped[int] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False,
     )
-
     location_id: Mapped[int | None] = mapped_column(
-        ForeignKey("locations.id", ondelete="SET NULL"),
-        index=True,
+        ForeignKey("locations.id", ondelete="SET NULL"), index=True, nullable=True,
+    )
+    location_text: Mapped[str | None] = mapped_column(
+        String(255),
         nullable=True,
+        default=None,
     )
-
     auditor_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
     )
-
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
 
     started_at: Mapped[datetime] = mapped_column(
