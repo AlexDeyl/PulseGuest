@@ -26,6 +26,7 @@ export type LocationShort = {
 
 export type MeResponse = {
   id: number;
+  full_name?: string | null;
   email: string;
   is_global: boolean;
   roles: RoleScope[];

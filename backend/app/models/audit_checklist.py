@@ -115,11 +115,9 @@ class ChecklistRun(Base):
         ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False,
     )
     location_id: Mapped[int | None] = mapped_column(
-        ForeignKey("locations.id", ondelete="SET NULL"),
-        index=True,
-        nullable=True,
+        ForeignKey("locations.id", ondelete="SET NULL"), index=True, nullable=True,
     )
-    location_text: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    location_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     auditor_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
     )

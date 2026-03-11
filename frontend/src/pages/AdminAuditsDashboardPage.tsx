@@ -68,6 +68,99 @@ function fmtPercent(value?: number | null) {
   return `${Math.round(value)}%`;
 }
 
+function clampPercent(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function percentBand(value?: number | null) {
+  const safe = clampPercent(value);
+  if (safe >= 85) return "good";
+  if (safe >= 70) return "mid";
+  return "low";
+}
+
+function percentTone(value?: number | null) {
+  const band = percentBand(value);
+
+  if (band === "good") {
+    return {
+      solid: "var(--pg-accent-3)",
+      soft: "var(--pg-accent-3)",
+      text: "var(--pg-success-text)",
+      border: "var(--pg-success-border)",
+      glow: "0 0 0 1px var(--pg-success-border) inset",
+    } as const;
+  }
+
+  if (band === "mid") {
+    return {
+      solid: "var(--pg-accent-1)",
+      soft: "var(--pg-accent-1)",
+      text: "var(--pg-text)",
+      border: "var(--pg-input-border-focus)",
+      glow: "0 0 0 1px var(--pg-input-border-focus) inset",
+    } as const;
+  }
+
+  return {
+    solid: "var(--pg-accent-2)",
+    soft: "var(--pg-accent-2)",
+    text: "var(--pg-text)",
+    border: "var(--pg-input-border-focus)",
+    glow: "0 0 0 1px var(--pg-input-border-focus) inset",
+  } as const;
+}
+
+function percentColor(value?: number | null) {
+  return percentTone(value).solid;
+}
+
+function percentTextColor(value?: number | null) {
+  return percentTone(value).text;
+}
+
+function percentSoftBadgeStyle(value?: number | null) {
+  const tone = percentTone(value);
+  return {
+    background: tone.soft,
+    color: tone.text,
+    boxShadow: tone.glow,
+    border: `1px solid ${tone.border}`,
+    backdropFilter: "blur(4px)",
+    fontWeight: 600,
+  } as const;
+}
+
+function volumeTone(ratio: number) {
+  const safe = Math.max(0, Math.min(1, ratio));
+
+  if (safe >= 0.85) {
+    return {
+      solid: "var(--pg-gradient)",
+      text: "var(--pg-on-primary)",
+      border: "var(--pg-input-border-focus)",
+      glow: "0 10px 26px rgba(0,0,0,0.18)",
+    } as const;
+  }
+
+  if (safe >= 0.55) {
+    return {
+      solid: "var(--pg-accent-1)",
+      text: "var(--pg-text)",
+      border: "var(--pg-input-border-focus)",
+      glow: "0 0 0 1px var(--pg-input-border-focus) inset",
+    } as const;
+  }
+
+  return {
+    solid: "var(--pg-accent-2)",
+    text: "var(--pg-text)",
+    border: "var(--pg-border)",
+    glow: "0 0 0 1px var(--pg-border) inset",
+  } as const;
+}
+
 function fmtScorePair(sum?: number | null, max?: number | null) {
   if (sum == null || max == null) return "—";
   return `${sum} / ${max}`;
@@ -140,7 +233,10 @@ function MiniBarChart({
   return (
     <div className="space-y-4">
       {items.map((item) => {
-        const width = Math.max(6, Math.round((item.value / max) * 100));
+        const ratio = item.value / max;
+        const width = Math.max(6, Math.round(ratio * 100));
+        const tone = volumeTone(ratio);
+
         return (
           <div key={`${item.label}_${item.value}`} className="space-y-1">
             <div className="flex items-start justify-between gap-3">
@@ -150,14 +246,20 @@ function MiniBarChart({
                   <div className="text-xs text-white/60">{item.sublabel}</div>
                 ) : null}
               </div>
-              <div className="text-sm font-semibold text-white">{item.value}</div>
+              <div className="text-sm font-semibold" style={{ color: tone.text }}>
+                {item.value}
+              </div>
             </div>
-            <div className="h-2 rounded-full bg-white/10">
-              <div
-                className="h-2 rounded-full bg-white/70 transition-all"
-                style={{ width: `${width}%` }}
-              />
-            </div>
+              <div className="h-2 rounded-full bg-white/10">
+                <div
+                  className="h-2 rounded-full transition-all"
+                  style={{
+                    width: `${width}%`,
+                    background: tone.solid,
+                    boxShadow: tone.glow,
+                  }}
+                />
+              </div>
           </div>
         );
       })}
@@ -175,7 +277,10 @@ function PercentBars({
   return (
     <div className="space-y-4">
       {items.map((item) => {
-        const safe = Math.max(0, Math.min(100, Math.round(item.value ?? 0)));
+        const safe = clampPercent(item.value);
+        const fillColor = percentColor(item.value);
+        const textColor = percentTextColor(item.value);
+
         return (
           <div key={`${item.label}_${safe}`} className="space-y-1">
             <div className="flex items-start justify-between gap-3">
@@ -185,14 +290,14 @@ function PercentBars({
                   <div className="text-xs text-white/60">{item.sublabel}</div>
                 ) : null}
               </div>
-              <div className="text-sm font-semibold text-white">
+              <div className="text-sm font-semibold" style={{ color: textColor }}>
                 {item.value == null ? "—" : `${safe}%`}
               </div>
             </div>
             <div className="h-2 rounded-full bg-white/10">
               <div
-                className="h-2 rounded-full bg-white/70 transition-all"
-                style={{ width: `${safe}%` }}
+                className="h-2 rounded-full transition-all"
+                style={{ width: `${safe}%`, background: fillColor }}
               />
             </div>
           </div>
@@ -305,21 +410,23 @@ function TrendLineChart({
 
       <div className="space-y-3">
         {chartPoints.map((p) => {
-          const percent = Math.max(0, Math.min(100, Math.round(Number(p.avg_score_percent ?? 0))));
+          const percent = clampPercent(p.avg_score_percent ?? 0);
+          const fillColor = percentColor(percent);
+          const textColor = percentTextColor(percent);
           return (
             <div key={p.period_key} className="space-y-1">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-white/80">{p.label}</span>
-                <span className="text-white font-medium">
+                <span className="font-medium" style={{ color: textColor }}>
                   {percent}% · проблемных: {Number(p.problem_completed_runs || 0)}
                 </span>
               </div>
-              <div className="h-2 rounded-full bg-white/10">
-                <div
-                  className="h-2 rounded-full bg-white/70 transition-all"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
+                <div className="h-2 rounded-full bg-white/10">
+                  <div
+                    className="h-2 rounded-full transition-all"
+                    style={{ width: `${percent}%`, background: fillColor }}
+                  />
+                </div>
             </div>
           );
         })}
@@ -356,18 +463,24 @@ function TrendBarsChart({
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
         {points.map((p) => {
-          const height = Math.max(10, Math.round((Number(p.completed_runs || 0) / max) * 120));
+          const ratio = Number(p.completed_runs || 0) / max;
+          const height = Math.max(10, Math.round(ratio * 120));
+          const tone = volumeTone(ratio);
+
           return (
             <div
               key={p.period_key}
-              className="flex min-h-[170px] flex-col items-center justify-end rounded-2xl border border-white/10 bg-white/5 p-3"
+              className="flex min-h-[170px] flex-col items-center justify-end rounded-2xl border bg-white/5 p-3"
+              style={{ borderColor: tone.border, boxShadow: tone.glow }}
             >
               <div
-                className="w-full rounded-t-xl bg-white/70"
-                style={{ height: `${height}px` }}
+                className="w-full rounded-t-xl transition-all"
+                style={{ height: `${height}px`, background: tone.solid }}
                 title={`${p.label}: ${p.completed_runs}`}
               />
-              <div className="mt-2 text-sm font-semibold text-white">{p.completed_runs}</div>
+              <div className="mt-2 text-sm font-semibold" style={{ color: tone.text }}>
+                {p.completed_runs}
+              </div>
               <div className="mt-1 text-center text-xs text-white/60">{p.label}</div>
             </div>
           );
@@ -576,10 +689,36 @@ export default function AdminAuditsDashboardPage() {
 
   const scoreHealth = useMemo(() => {
     const avg = summary?.avg_score_percent;
-    if (avg == null) return { label: "Нет данных", width: 0 };
-    if (avg >= 85) return { label: "Сильный результат", width: Math.round(avg) };
-    if (avg >= 70) return { label: "Стабильно", width: Math.round(avg) };
-    return { label: "Нужны улучшения", width: Math.round(avg) };
+    if (avg == null) {
+      return {
+        label: "Нет данных",
+        width: 0,
+        color: percentColor(0),
+        textColor: percentTextColor(0),
+      };
+    }
+    if (avg >= 85) {
+      return {
+        label: "Сильный результат",
+        width: Math.round(avg),
+        color: percentColor(avg),
+        textColor: percentTextColor(avg),
+      };
+    }
+    if (avg >= 70) {
+      return {
+        label: "Стабильно",
+        width: Math.round(avg),
+        color: percentColor(avg),
+        textColor: percentTextColor(avg),
+      };
+    }
+    return {
+      label: "Нужны улучшения",
+      width: Math.round(avg),
+      color: percentColor(avg),
+      textColor: percentTextColor(avg),
+    };
   }, [summary?.avg_score_percent]);
 
   const worstQuestionHeatItems = useMemo(
@@ -717,12 +856,12 @@ export default function AdminAuditsDashboardPage() {
               <div>
                 <div className="mb-1 flex items-center justify-between text-xs text-white/60">
                   <span>{scoreHealth.label}</span>
-                  <span>{fmtPercent(summary?.avg_score_percent)}</span>
+                  <span style={{ color: scoreHealth.textColor }}>{fmtPercent(summary?.avg_score_percent)}</span>
                 </div>
                 <div className="h-2 rounded-full bg-white/10">
                   <div
-                    className="h-2 rounded-full bg-white/70 transition-all"
-                    style={{ width: `${scoreHealth.width}%` }}
+                    className="h-2 rounded-full transition-all"
+                    style={{ width: `${scoreHealth.width}%`, background: scoreHealth.color }}
                   />
                 </div>
               </div>
@@ -863,7 +1002,10 @@ export default function AdminAuditsDashboardPage() {
                       </div>
                       <div className="mt-1 text-xs text-white/60">{item.template_name}</div>
                     </div>
-                    <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-xs text-white/85">
+                    <div
+                      className="shrink-0 rounded-full px-2 py-1 text-xs font-medium"
+                      style={percentSoftBadgeStyle(item.score?.score_percent ?? null)}
+                    >
                       {fmtPercent(item.score?.score_percent ?? null)}
                     </div>
                   </div>

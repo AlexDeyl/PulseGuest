@@ -127,6 +127,7 @@ async def me(
     return {
         "id": user.id,
         "email": user.email,
+        "full_name": user.full_name,
         "is_global": bool(is_global),
         "roles": [
             {"role": r.role, "organization_id": r.organization_id, "location_id": r.location_id}

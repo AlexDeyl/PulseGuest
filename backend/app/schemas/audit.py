@@ -48,11 +48,11 @@ class ChecklistRunCreateIn(BaseModel):
     template_id: int
     organization_id: int
     location_id: Optional[int] = None
-    location_text: Optional[str] = None
+    location_text: str | None = None
 
 
 class ChecklistRunMetaUpdateIn(BaseModel):
-    location_text: Optional[str] = None
+    location_text: str | None = None
 
 
 class ChecklistAnswerUpsertIn(BaseModel):

@@ -13,8 +13,8 @@ export default function AdminLoginPage() {
   const nav = useNavigate();
   const loc = useLocation() as any;
 
-  const [email, setEmail] = useState("director@pulseguest.local");
-  const [password, setPassword] = useState("Admin123!");
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const { enabled: devEnabled } = useDevMode();
@@ -75,7 +75,7 @@ export default function AdminLoginPage() {
                   Вход
                 </h1>
                 <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
-                  Director / Service Manager
+                  Введите Email и пароль
                 </p>
               </div>
               <div className="grid h-10 w-10 place-items-center rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)]">
