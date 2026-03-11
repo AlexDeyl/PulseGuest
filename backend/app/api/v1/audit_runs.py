@@ -1,12 +1,23 @@
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any
+import ast
+import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 from app.api.v1.deps import (
     get_allowed_location_ids,
@@ -54,6 +65,106 @@ def _dt_iso(dt: Any) -> str | None:
         return dt.isoformat()
     except Exception:
         return str(dt)
+
+
+def _register_pdf_font() -> str:
+    """
+    Возвращает имя шрифта для PDF.
+    Пытаемся зарегистрировать кириллический TTF.
+    Если не получилось — fallback на Helvetica.
+    """
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/app/fonts/DejaVuSans.ttf",
+    ]
+    for p in candidates:
+        try:
+            path = Path(p)
+            if path.exists():
+                pdfmetrics.registerFont(TTFont("PGDejaVuSans", str(path)))
+                return "PGDejaVuSans"
+        except Exception:
+            pass
+    return "Helvetica"
+
+
+def _normalize_answer_parts(answer: ChecklistAnswer | None) -> tuple[str, str]:
+    """
+    Возвращает (human_answer, score_text)
+    Без техмусора вида {'score': 1, 'choice': 'yes'}.
+    """
+    if answer is None:
+        return "", ""
+
+    value_json = getattr(answer, "value_json", None)
+    value = getattr(answer, "value", None)
+    value_text = getattr(answer, "value_text", None)
+    score = getattr(answer, "score", None)
+
+    human_answer = ""
+    score_text = ""
+
+    def _as_score_text(v: Any) -> str:
+        if v is None:
+            return ""
+        try:
+            fv = float(v)
+            if fv.is_integer():
+                return str(int(fv))
+            return str(round(fv, 2))
+        except Exception:
+            return str(v)
+
+    if isinstance(value_json, dict):
+        choice = str(value_json.get("choice") or "").strip().lower()
+        text = str(value_json.get("text") or "").strip()
+        score_from_json = value_json.get("score")
+
+        if choice == "yes":
+            human_answer = "Да"
+        elif choice == "no":
+            human_answer = "Нет"
+        elif choice:
+            human_answer = choice
+
+        if text:
+            human_answer = f"{human_answer} ({text})" if human_answer else text
+
+        if score is None and score_from_json is not None:
+            score_text = _as_score_text(score_from_json)
+
+    elif isinstance(value_json, list):
+        vals = [str(x).strip() for x in value_json if str(x).strip()]
+        human_answer = ", ".join(vals)
+
+    elif isinstance(value_json, (str, int, float, bool)):
+        if isinstance(value_json, bool):
+            human_answer = "Да" if value_json else "Нет"
+        else:
+            human_answer = str(value_json).strip()
+
+    if not human_answer:
+        if isinstance(value_text, str) and value_text.strip():
+            human_answer = value_text.strip()
+        elif isinstance(value, bool):
+            human_answer = "Да" if value else "Нет"
+        elif value not in (None, ""):
+            human_answer = str(value).strip()
+
+    if not score_text and score is not None:
+        score_text = _as_score_text(score)
+
+    if human_answer in ("yes", "Yes", "YES"):
+        human_answer = "Да"
+    elif human_answer in ("no", "No", "NO"):
+        human_answer = "Нет"
+
+    return human_answer, score_text
+
+
+def _attachments_mark(answer_attachments: list[ChecklistAttachment] | None) -> str:
+    return "Есть" if answer_attachments else "Нет"
 
 
 def _value_filled(v: Any) -> bool:
@@ -874,27 +985,173 @@ async def run_pdf(
     ),
 ):
     """
-    Минимально удобный PDF-отчёт (таблица):
-    # | Раздел | Вопрос | Ответ | Комментарий | Фото (кол-во)
+    PDF-отчёт completed run:
+    # | Раздел | Вопрос | Ответ | Балл | Комментарий | Фото
     """
+
+    logger = logging.getLogger(__name__)
+
+    def _register_pdf_font() -> str:
+        candidates = [
+            ("PGDejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            ("PGDejaVuSans", "/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+            ("PGLiberationSans", "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+            ("PGFreeSans", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+            ("PGDejaVuSans", "/app/fonts/DejaVuSans.ttf"),
+        ]
+
+        already_registered = set(pdfmetrics.getRegisteredFontNames())
+
+        for font_name, font_path in candidates:
+            try:
+                path = Path(font_path)
+                if not path.exists():
+                    continue
+
+                if font_name not in already_registered:
+                    pdfmetrics.registerFont(TTFont(font_name, str(path)))
+
+                logger.warning("PDF font selected: %s (%s)", font_name, str(path))
+                return font_name
+            except Exception as exc:
+                logger.warning("PDF font registration failed for %s: %s", font_path, exc)
+
+        logger.warning("PDF font fallback to Helvetica (no unicode TTF found)")
+        return "Helvetica"
+
+    def _score_text(v: Any) -> str:
+        if v is None or v == "":
+            return ""
+        try:
+            fv = float(v)
+            if fv.is_integer():
+                return str(int(fv))
+            return str(round(fv, 2))
+        except Exception:
+            return str(v)
+
+    def _try_parse_structured(raw: Any) -> Any:
+        if raw is None:
+            return None
+        if isinstance(raw, (dict, list, bool, int, float)):
+            return raw
+        if not isinstance(raw, str):
+            return raw
+
+        s = raw.strip()
+        if not s:
+            return ""
+
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+        try:
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, (dict, list, bool, int, float, str)):
+                return parsed
+        except Exception:
+            pass
+
+        return s
+
+    def _humanize_answer(a: Any) -> tuple[str, str]:
+        if a is None:
+            return "", ""
+
+        answer_text = ""
+        score_text = ""
+
+        value_text = _try_parse_structured(getattr(a, "value_text", None))
+        value_json = _try_parse_structured(getattr(a, "value_json", None))
+        value = _try_parse_structured(getattr(a, "value", None))
+        score = getattr(a, "score", None)
+
+        candidate = value_json
+        if candidate in (None, "", {}, []):
+            candidate = value_text
+        if candidate in (None, "", {}, []):
+            candidate = value
+
+        if isinstance(candidate, dict):
+            choice = str(candidate.get("choice") or "").strip().lower()
+            free_text = str(candidate.get("text") or "").strip()
+            dict_score = candidate.get("score")
+
+            if choice == "yes":
+                answer_text = "Да"
+            elif choice == "no":
+                answer_text = "Нет"
+            elif choice:
+                answer_text = choice
+
+            if free_text:
+                answer_text = f"{answer_text} ({free_text})" if answer_text else free_text
+
+            if dict_score is not None:
+                score_text = _score_text(dict_score)
+
+        elif isinstance(candidate, list):
+            items = [str(x).strip() for x in candidate if str(x).strip()]
+            answer_text = ", ".join(items)
+
+        elif isinstance(candidate, bool):
+            answer_text = "Да" if candidate else "Нет"
+
+        elif candidate not in (None, ""):
+            answer_text = str(candidate).strip()
+
+        if answer_text in ("yes", "Yes", "YES"):
+            answer_text = "Да"
+        elif answer_text in ("no", "No", "NO"):
+            answer_text = "Нет"
+
+        if not score_text and score is not None:
+            score_text = _score_text(score)
+
+        if answer_text.startswith("{") and "choice" in answer_text and "score" in answer_text:
+            answer_text = ""
+
+        return answer_text, score_text
+    
+    def _pdf_text(value: Any) -> str:
+        s = str(value or "").strip()
+        s = (
+            s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace("\n", "<br/>")
+        )
+        return s
+
+    def _p(value: Any, *, header: bool = False) -> Paragraph:
+        return Paragraph(_pdf_text(value), header_cell_style if header else cell_style)
+
     run = await _ensure_run_access(db=db, user=user, run_id=int(run_id))
     if str(run.status) != "completed":
         raise HTTPException(status_code=400, detail="Run is not completed")
 
     tmpl = (
-        await db.execute(select(ChecklistTemplate).where(ChecklistTemplate.id == int(run.template_id)))
+        await db.execute(
+            select(ChecklistTemplate).where(ChecklistTemplate.id == int(run.template_id))
+        )
     ).scalar_one()
 
     org_name = None
     if Organization is not None:
         org_name = (
-            await db.execute(select(Organization.name).where(Organization.id == int(run.organization_id)))
+            await db.execute(
+                select(Organization.name).where(Organization.id == int(run.organization_id))
+            )
         ).scalar_one_or_none()
 
     loc_name = None
     if Location is not None and getattr(run, "location_id", None):
         loc_name = (
-            await db.execute(select(Location.name).where(Location.id == int(run.location_id)))
+            await db.execute(
+                select(Location.name).where(Location.id == int(run.location_id))
+            )
         ).scalar_one_or_none()
 
     qs = (
@@ -919,24 +1176,46 @@ async def run_pdf(
     ).all()
     att_count = {int(qid): int(cnt) for qid, cnt in att_counts_rows}
 
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    pdf_font_name = _register_pdf_font()
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=A4,
-        leftMargin=14 * mm,
-        rightMargin=14 * mm,
+        pagesize=landscape(A4),
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
         topMargin=12 * mm,
         bottomMargin=12 * mm,
     )
     styles = getSampleStyleSheet()
+    for style_name in ("Title", "Normal", "Heading1", "Heading2", "Heading3", "BodyText"):
+        if style_name in styles:
+            styles[style_name].fontName = pdf_font_name
+
+    cell_style = ParagraphStyle(
+        "PGCell",
+        parent=styles["Normal"],
+        fontName=pdf_font_name,
+        fontSize=8,
+        leading=10,
+        wordWrap="CJK",
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+
+    header_cell_style = ParagraphStyle(
+        "PGHeaderCell",
+        parent=styles["Normal"],
+        fontName=pdf_font_name,
+        fontSize=8,
+        leading=10,
+        alignment=1,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
 
     title = f"{getattr(tmpl, 'name', 'Checklist')} — отчет"
+    logger.warning("PDF generation font in use: %s", pdf_font_name)
     meta_lines = [
         "Статус: completed",
         f"Организация: {org_name or ''}",
@@ -946,55 +1225,74 @@ async def run_pdf(
     ]
 
     story = [
-        Paragraph(title, styles["Title"]),
+        Paragraph(_pdf_text(title), styles["Title"]),
         Spacer(1, 6),
-        Paragraph("<br/>".join(meta_lines), styles["Normal"]),
+        Paragraph(_pdf_text("<br/>".join(meta_lines)).replace("&lt;br/&gt;", "<br/>"), styles["Normal"]),
         Spacer(1, 10),
     ]
 
-    data: list[list[Any]] = [["#", "Раздел", "Вопрос", "Ответ", "Комментарий", "Фото"]]
+    data: list[list[Any]] = [[
+        _p("#", header=True),
+        _p("Раздел", header=True),
+        _p("Вопрос", header=True),
+        _p("Ответ", header=True),
+        _p("Балл", header=True),
+        _p("Комментарий", header=True),
+        _p("Фото", header=True),
+    ]]
+
     i = 1
     for q in qs:
         a = ans_by_q.get(int(q.id))
-
-        answer_text = ""
-        if a is not None:
-            if hasattr(a, "value_text") and getattr(a, "value_text"):
-                answer_text = str(getattr(a, "value_text"))
-            elif hasattr(a, "value_json") and getattr(a, "value_json") is not None:
-                answer_text = str(getattr(a, "value_json"))
-            elif hasattr(a, "value") and getattr(a, "value") is not None:
-                answer_text = str(getattr(a, "value"))
-            elif hasattr(a, "score") and getattr(a, "score") is not None:
-                answer_text = str(getattr(a, "score"))
+        answer_text, score_text = _humanize_answer(a)
 
         comment = ""
         if a is not None and hasattr(a, "comment") and getattr(a, "comment"):
-            comment = str(getattr(a, "comment"))
+            comment = str(getattr(a, "comment")).strip()
 
         photos = att_count.get(int(q.id), 0)
+
         data.append(
             [
-                str(i),
-                str(getattr(q, "section", "") or ""),
-                str(getattr(q, "text", "") or ""),
-                answer_text,
-                comment,
-                str(photos) if photos else "",
+                _p(str(i)),
+                _p(str(getattr(q, "section", "") or "")),
+                _p(str(getattr(q, "text", "") or "")),
+                _p(answer_text),
+                _p(score_text),
+                _p(comment),
+                _p("Есть" if photos else "Нет"),
             ]
         )
         i += 1
 
-    tbl = Table(data, colWidths=[10 * mm, 25 * mm, 70 * mm, 25 * mm, 50 * mm, 12 * mm])
+    tbl = Table(
+        data,
+        repeatRows=1,
+        colWidths=[
+            10 * mm,   # #
+            34 * mm,   # Раздел
+            92 * mm,   # Вопрос
+            24 * mm,   # Ответ
+            14 * mm,   # Балл
+            58 * mm,   # Комментарий
+            16 * mm,   # Фото
+        ],
+    )
     tbl.setStyle(
         TableStyle(
             [
+                ("FONTNAME", (0, 0), (-1, -1), pdf_font_name),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (4, 1), (4, -1), "CENTER"),
+                ("ALIGN", (6, 1), (6, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]
         )
     )

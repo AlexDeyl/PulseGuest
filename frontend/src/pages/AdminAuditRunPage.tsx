@@ -109,17 +109,27 @@ export default function AdminAuditRunPage() {
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [savedAt, setSavedAt] = useState<Record<number, string>>({});
   const [uploading, setUploading] = useState<Record<number, boolean>>({});
+  const [uploadError, setUploadError] = useState<Record<number, string | null>>({});
+  const [uploadSuccess, setUploadSuccess] = useState<Record<number, string | null>>({});
   const [previewUrls, setPreviewUrls] = useState<Record<number, string>>({});
 
   const timersRef = useRef<Record<number, any>>({});
   const seqRef = useRef<Record<number, number>>({});
   const draftRef = useRef<Record<number, DraftAnswer>>({});
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const editorCardRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
 
   const isReadOnly = data?.status === "completed";
+
+  const pickUploadFile = (q: ChecklistRunQuestion, files: FileList | null | undefined) => {
+    const f = files?.[0];
+    if (!f) return;
+    void onUpload(q, f);
+  };
 
   const refresh = async () => {
     if (!Number.isFinite(rid) || rid <= 0) return;
@@ -240,6 +250,19 @@ export default function AdminAuditRunPage() {
     return n;
   }, [questions, draft]);
 
+  const openQuestion = (questionId: number) => {
+    setActiveQid(questionId);
+
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      window.setTimeout(() => {
+        editorCardRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 80);
+    }
+  };
+
   const setAnswerValue = (questionId: number, nextValue: any) => {
     if (!data) return;
     if (data.status !== "draft") return;
@@ -299,12 +322,29 @@ export default function AdminAuditRunPage() {
     if (!data) return;
     if (data.status !== "draft") return;
 
+    setUiMsg(null);
+    setUploadError((p) => ({ ...p, [q.id]: null }));
+    setUploadSuccess((p) => ({ ...p, [q.id]: null }));
+
+    if (!String(file.type || "").startsWith("image/")) {
+      setUploadError((p) => ({ ...p, [q.id]: "Можно прикреплять только изображения." }));
+      return;
+    }
+
     setUploading((p) => ({ ...p, [q.id]: true }));
+
     try {
       await uploadChecklistAttachment({ runId: data.id, questionId: q.id, file });
       await refresh();
-    } catch {
-      // ignore
+      setUploadSuccess((p) => ({
+        ...p,
+        [q.id]: `Фото прикреплено: ${file.name}`,
+      }));
+    } catch (e) {
+      setUploadError((p) => ({
+        ...p,
+        [q.id]: errToText(e, devEnabled),
+      }));
     } finally {
       setUploading((p) => ({ ...p, [q.id]: false }));
     }
@@ -495,9 +535,13 @@ export default function AdminAuditRunPage() {
       {!data ? null : (
         <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
           {/* LEFT: questions list */}
-          <GlassCard className="p-4">
+          <div ref={editorCardRef}>
+            <GlassCard className="p-4">
             <div className="text-sm font-semibold text-[color:var(--pg-text)]">Вопросы</div>
-            <div className="mt-3 max-h-[68vh] overflow-auto pr-1">
+              <div className="mt-1 text-xs text-[color:var(--pg-muted)] lg:hidden">
+                Нажмите на вопрос — экран прокрутится к блоку ответа ниже.
+              </div>
+            <div className="mt-3 max-h-[44vh] overflow-auto pr-1 lg:max-h-[68vh]">
               {sections.map((s) => (
                 <div key={s.section} className="mb-4">
                   <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[color:var(--pg-muted)]">
@@ -514,7 +558,7 @@ export default function AdminAuditRunPage() {
                         <button
                           key={q.id}
                           type="button"
-                          onClick={() => setActiveQid(q.id)}
+                          onClick={() => openQuestion(q.id)}
                           className={[
                             "flex w-full items-start gap-2 rounded-2xl border px-3 py-2 text-left text-sm transition",
                             "border-[color:var(--pg-border)]",
@@ -552,6 +596,7 @@ export default function AdminAuditRunPage() {
               </div>
             )}
           </GlassCard>
+        </div>
 
           {/* RIGHT: active question */}
           <div className="grid gap-4">
@@ -569,7 +614,7 @@ export default function AdminAuditRunPage() {
                     </div>
 
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--pg-muted)]">
-                      <span>type: {activeQ.answer_type}</span>
+                      <span>Да: 1 балл; Нет: 0 баллов</span>
                       {activeQ.is_required && (
                         <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">
                           обязательный
@@ -632,36 +677,62 @@ export default function AdminAuditRunPage() {
                       <div className="text-xs text-[color:var(--pg-muted)]">
                         {data.status === "draft"
                           ? uploading[activeQ.id]
-                            ? "Загрузка…"
-                            : "Можно прикрепить с камеры или из файлов"
+                            ? "Загрузка фото…"
+                            : "Можно добавить фото к вопросу"
                           : "Фотофиксация доступна для просмотра"}
                       </div>
                     </div>
 
-                    {/* Upload only in draft */}
                     {data.status === "draft" && (
-                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <div className="mt-3">
                         <input
+                          ref={fileInputRef}
                           type="file"
-                          disabled={isReadOnly}
                           accept="image/*"
-                          capture="environment"
+                          disabled={isReadOnly || uploading[activeQ.id]}
                           onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (!f) return;
-                            void onUpload(activeQ, f);
+                            pickUploadFile(activeQ, e.target.files);
                             e.currentTarget.value = "";
                           }}
-                          className="block w-full max-w-xs text-xs text-[color:var(--pg-muted)] file:mr-3 file:rounded-xl file:border-0 file:bg-[color:var(--pg-card-hover)] file:px-3 file:py-2 file:text-xs file:font-semibold file:text-[color:var(--pg-text)] hover:file:opacity-95"
+                          className="hidden"
                         />
+
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Button
+                            variant="secondary"
+                            disabled={uploading[activeQ.id]}
+                            onClick={() => fileInputRef.current?.click()}
+                          >
+                            Добавить фото
+                          </Button>
+                        </div>
+
+                        <div className="mt-3 space-y-2">
+                          {uploading[activeQ.id] && (
+                            <div className="text-xs text-[color:var(--pg-muted)]">
+                              Идёт загрузка файла…
+                            </div>
+                          )}
+
+                          {uploadSuccess[activeQ.id] && !uploading[activeQ.id] && (
+                            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                              {uploadSuccess[activeQ.id]}
+                            </div>
+                          )}
+
+                          {uploadError[activeQ.id] && !uploading[activeQ.id] && (
+                            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                              Ошибка загрузки: {uploadError[activeQ.id]}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
 
-                    {/* Photo fixation + open photos */}
                     {(activeQ.attachments?.length ?? 0) > 0 && (
                       <div className="mt-4">
                         <div className="text-xs text-[color:var(--pg-muted)]">
-                          Имеется фотофиксация: {activeQ.attachments.length}
+                          Прикреплено файлов: {activeQ.attachments.length}
                         </div>
 
                         <div className="mt-2 flex flex-wrap gap-2">
@@ -677,7 +748,6 @@ export default function AdminAuditRunPage() {
                           ))}
                         </div>
 
-                        {/* Thumbnails grid (удобно визуально) */}
                         <div className="mt-4 grid gap-3 sm:grid-cols-2">
                           {activeQ.attachments.map((a) => {
                             const isImg = String(a.content_type || "").startsWith("image/");
@@ -700,7 +770,14 @@ export default function AdminAuditRunPage() {
                                   <div className="line-clamp-2 text-xs font-semibold text-[color:var(--pg-text)]">
                                     {a.file_name}
                                   </div>
-                                  <div className="mt-1 text-xs text-[color:var(--pg-muted)]">{a.content_type}</div>
+                                  <div className="mt-1 text-xs text-[color:var(--pg-muted)]">
+                                    {a.content_type || "image/*"}
+                                  </div>
+                                  <div className="mt-1 text-xs text-[color:var(--pg-muted)]">
+                                    {a.created_at
+                                      ? new Date(a.created_at).toLocaleString("ru-RU")
+                                      : "Файл прикреплён"}
+                                  </div>
                                   <div className="mt-2">
                                     <Button
                                       variant="secondary"

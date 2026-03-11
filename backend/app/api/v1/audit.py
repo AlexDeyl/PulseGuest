@@ -1,8 +1,7 @@
 from __future__ import annotations
-
+import errno
 import os
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -50,6 +49,49 @@ def _safe_filename(name: str) -> str:
     name = name.replace("\\", "_").replace("/", "_")
     name = _FILENAME_CLEAN_RE.sub("_", name)
     return name[:120] if len(name) > 120 else name
+
+
+def _resolve_audit_upload_root() -> Path:
+    configured = Path(settings.AUDIT_UPLOAD_DIR)
+    preferred = configured if configured.is_absolute() else (Path(os.getcwd()) / configured)
+
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        test_file = preferred / ".write_test"
+        with test_file.open("wb") as fh:
+            fh.write(b"1")
+        test_file.unlink(missing_ok=True)
+        return preferred
+    except OSError as exc:
+        if exc.errno not in (errno.EACCES, errno.EROFS, errno.ENOENT):
+            raise
+
+    fallback = Path("/tmp/pulseguest_uploads/audit")
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def _resolve_attachment_path(file_path: str) -> Path:
+    p = Path(file_path)
+    if p.is_absolute():
+        return p
+
+    cwd_path = Path(os.getcwd()) / p
+    if cwd_path.exists():
+        return cwd_path
+
+    configured = Path(settings.AUDIT_UPLOAD_DIR)
+    configured_root = configured if configured.is_absolute() else (Path(os.getcwd()) / configured)
+    configured_candidate = configured_root / p.name
+    if configured_candidate.exists():
+        return configured_candidate
+
+    fallback_root = Path("/tmp/pulseguest_uploads/audit")
+    fallback_candidate = fallback_root / p.name
+    if fallback_candidate.exists():
+        return fallback_candidate
+
+    return cwd_path
 
 
 async def _assert_run_read_access(db: AsyncSession, user: User, run: ChecklistRun) -> None:
@@ -491,41 +533,74 @@ async def upload_attachment(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    base_dir = Path(settings.AUDIT_UPLOAD_DIR)
-    sub_dir = base_dir / f"run_{run.id}" / f"q_{int(question_id)}"
-    sub_dir.mkdir(parents=True, exist_ok=True)
+    if not bool(getattr(q, "allow_photos", False)):
+        raise HTTPException(status_code=400, detail="Attachments are not allowed for this question")
 
-    original_name = _safe_filename(file.filename or "photo")
+    if file is None:
+        raise HTTPException(status_code=400, detail="File is required")
+
+    incoming_type = str(file.content_type or "").strip().lower()
+    if incoming_type and not incoming_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are allowed")
+
+    original_name = _safe_filename(file.filename or "photo.jpg")
     ext = Path(original_name).suffix or ".jpg"
     stored_name = f"{uuid4().hex}{ext}"
-    stored_rel_path = str((sub_dir / stored_name).as_posix())
 
-    abs_path = Path(os.getcwd()) / stored_rel_path
-    with abs_path.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+    upload_root = _resolve_audit_upload_root()
+    abs_sub_dir = upload_root / f"run_{run.id}" / f"q_{int(question_id)}"
+    abs_sub_dir.mkdir(parents=True, exist_ok=True)
 
-    size = abs_path.stat().st_size
+    abs_path = abs_sub_dir / stored_name
+    stored_rel_path = str(abs_path.as_posix())
 
-    att = ChecklistAttachment(
-        run_id=run.id,
-        question_id=int(question_id),
-        uploader_user_id=user.id,
-        file_name=original_name,
-        content_type=file.content_type or "",
-        file_path=stored_rel_path,
-        size_bytes=int(size),
-    )
-    db.add(att)
-    await db.commit()
-    await db.refresh(att)
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file")
+        with abs_path.open("wb") as out:
+            out.write(content)
 
-    return {
-        "id": att.id,
-        "file_name": att.file_name,
-        "content_type": att.content_type,
-        "size_bytes": att.size_bytes,
-        "created_at": att.created_at.isoformat() if att.created_at else None,
-    }
+        size = abs_path.stat().st_size
+
+        att = ChecklistAttachment(
+            run_id=run.id,
+            question_id=int(question_id),
+            uploader_user_id=user.id,
+            file_name=original_name,
+            content_type=incoming_type or "image/*",
+            file_path=stored_rel_path,
+            size_bytes=int(size),
+        )
+        db.add(att)
+        await db.commit()
+        await db.refresh(att)
+
+        return {
+            "id": att.id,
+            "file_name": att.file_name,
+            "content_type": att.content_type,
+            "size_bytes": att.size_bytes,
+            "created_at": att.created_at.isoformat() if att.created_at else None,
+        }
+    except HTTPException:
+        await db.rollback()
+        try:
+            if abs_path.exists():
+                abs_path.unlink()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        await db.rollback()
+        try:
+            if abs_path.exists():
+                abs_path.unlink()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Attachment upload failed: {str(exc)}")
+    finally:
+        await file.close()
 
 
 @router.get("/attachments/{attachment_id}")
