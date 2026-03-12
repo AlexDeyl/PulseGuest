@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Lock, Mail } from "lucide-react";
+const pulseStayLoginLogo = "/brand/pulsestay-login-logo.png";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import GlassCard from "../components/GlassCard";
@@ -69,12 +70,24 @@ export default function AdminLoginPage() {
           transition={{ duration: 0.18 }}
         >
           <GlassCard>
+            <div className="mb-1 flex flex-col items-center text-center leading-none">
+              <img
+                src={pulseStayLoginLogo}
+                alt="PulseStay"
+                className="h-auto w-full max-w-[320px] object-contain sm:max-w-[420px]"
+                draggable={false}
+              />
+              <div className="-mt-1 text-sm text-[color:var(--pg-muted)] sm:text-base">
+                Control center
+              </div>
+            </div>
+
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h1 className="text-2xl font-semibold text-[color:var(--pg-text)]">
+                <h1 className="text-2xl font-semibold leading-none text-[color:var(--pg-text)]">
                   Вход
                 </h1>
-                <p className="mt-2 text-sm text-[color:var(--pg-muted)]">
+                <p className="mt-1 text-sm text-[color:var(--pg-muted)]">
                   Введите Email и пароль
                 </p>
               </div>

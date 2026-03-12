@@ -10,6 +10,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import Backdrop from "./Backdrop";
+import BrandLogo from "./brand/BrandLogo";
 import { TooltipProvider, Tooltip } from "./ui/Tooltip";
 import { useTheme } from "../shared/useTheme";
 import { useAuth } from "../shared/auth";
@@ -121,37 +122,31 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
             {mode === "public" ? (
-              <div className="flex items-center gap-3" aria-label="PulseGuest">
-                <div className="grid h-10 w-10 place-items-center rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)]">
-                  PG
-                </div>
-                <div className="leading-tight">
-                  <div className="text-sm font-semibold text-[color:var(--pg-text)]">
-                    PulseGuest
-                  </div>
-                  <div className="text-xs text-[color:var(--pg-muted)]">
-                    Платформа обратной связи
-                  </div>
-                </div>
+              <div aria-label="PulseStay">
+                <BrandLogo
+                  title="PulseStay"
+                  subtitle="Платформа обратной связи"
+                  logoClassName="h-10 w-10 shrink-0 object-contain"
+                  titleClassName="truncate text-sm font-semibold tracking-[-0.03em] text-[color:var(--pg-text)]"
+                />
               </div>
             ) : (
               <button
                 type="button"
                 onClick={onBack}
-                className="flex items-center gap-3"
+                className="flex min-w-0 items-center gap-3 text-left"
                 aria-label="Назад"
               >
                 <div className="grid h-10 w-10 place-items-center rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)]">
                   <ArrowLeft className="h-5 w-5 text-[color:var(--pg-text)]" />
                 </div>
-                <div className="leading-tight text-left">
-                  <div className="text-sm font-semibold text-[color:var(--pg-text)]">
-                    PulseGuest
-                  </div>
-                  <div className="text-xs text-[color:var(--pg-muted)]">
-                    Feedback platform
-                  </div>
-                </div>
+                <BrandLogo
+                  className="min-w-0"
+                  title="PulseStay"
+                  subtitle="Feedback platform"
+                  logoClassName="hidden"
+                  titleClassName="truncate text-sm font-semibold tracking-[-0.03em] text-[color:var(--pg-text)]"
+                />
               </button>
             )}
 
@@ -280,7 +275,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <footer className="border-t border-[color:var(--pg-border)] bg-[color:var(--pg-card)]/40 backdrop-blur-xl">
           <div className="mx-auto max-w-5xl px-4 py-6 text-xs text-[color:var(--pg-muted)]">
-            © {new Date().getFullYear()} PulseGuest
+            © {new Date().getFullYear()} PulseStay
           </div>
         </footer>
       </div>

@@ -475,8 +475,8 @@ export default function AdminDashboardPage() {
         <GlassCard>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-sm text-[color:var(--pg-muted)]">PulseGuest • Admin</div>
-              <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Дашборд</h1>
+              <div className="text-sm text-[color:var(--pg-muted)]">PulseStay • Управление и статистика</div>
+              <h1 className="mt-1 text-2xl font-semibold text-[color:var(--pg-text)]">Аналитика отзывов</h1>
 
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-[color:var(--pg-muted)]">
                 <span>
@@ -696,9 +696,9 @@ export default function AdminDashboardPage() {
           </div>
 
           {/* Top row: search + pinned + recent */}
-          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <div className="mt-4 grid min-w-0 gap-3 lg:grid-cols-3">
             {/* Search */}
-            <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-4">
+            <div className="min-w-0 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--pg-text)]">
                 <Search className="h-4 w-4 text-[color:var(--pg-muted)]" />
                 Быстрый поиск
@@ -719,7 +719,7 @@ export default function AdminDashboardPage() {
                     searchResults.map((l: any) => (
                       <div
                         key={l.id}
-                        className="flex items-center justify-between gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 py-2"
+                        className="flex min-w-0 items-center justify-between gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 py-2"
                       >
                         <div className="min-w-0">
                           <div className="truncate text-sm text-[color:var(--pg-text)]">{l.name}</div>
@@ -729,7 +729,7 @@ export default function AdminDashboardPage() {
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 gap-2">
+                        <div className="flex shrink-0 gap-2 self-start">
                           {canViewSubmissions && (
                             <Button variant="secondary" onClick={() => goToLocation(Number(l.id), "submissions")}>
                               Отзывы
@@ -744,7 +744,7 @@ export default function AdminDashboardPage() {
             </div>
 
             {/* Pinned */}
-            <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-4">
+            <div className="min-w-0 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-4">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold text-[color:var(--pg-text)]">Закреплённые</div>
                 <div className="text-xs text-[color:var(--pg-faint)]">{pinnedIds.length ? `(${pinnedIds.length})` : ""}</div>
@@ -761,7 +761,7 @@ export default function AdminDashboardPage() {
                     const st = statsById.get(Number(lid));
                     const name = st?.location_name || base?.name || "Локация";
                     return (
-                      <div key={lid} className="flex items-center justify-between gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 py-2">
+                      <div key={lid} className="flex min-w-0 items-center justify-between gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 py-2">
                         <div className="min-w-0">
                           <div className="truncate text-sm text-[color:var(--pg-text)]">{name}</div>
                           <div className="truncate text-xs text-[color:var(--pg-muted)]">
@@ -769,7 +769,7 @@ export default function AdminDashboardPage() {
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2 self-start">
                           {canViewSubmissions && (
                               <Button variant="secondary" onClick={() => goToLocation(Number(lid), "submissions")}>
                                 Открыть
@@ -792,7 +792,7 @@ export default function AdminDashboardPage() {
             </div>
 
             {/* Recent */}
-            <div className="rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-4">
+            <div className="min-w-0 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] p-4">
               <div className="text-sm font-semibold text-[color:var(--pg-text)]">Последние</div>
 
               <div className="mt-3 space-y-2">
@@ -806,13 +806,13 @@ export default function AdminDashboardPage() {
                     const lastAt = st?.last_submission_at ? new Date(st.last_submission_at).toLocaleString() : "—";
 
                     return (
-                      <div key={lid} className="flex items-center justify-between gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 py-2">
+                      <div key={lid} className="flex min-w-0 items-center justify-between gap-2 rounded-2xl border border-[color:var(--pg-border)] bg-[color:var(--pg-card)] px-3 py-2">
                         <div className="min-w-0">
                           <div className="truncate text-sm text-[color:var(--pg-text)]">{name}</div>
                           <div className="truncate text-xs text-[color:var(--pg-muted)]">Последний отзыв: {lastAt}</div>
                         </div>
 
-                        <div className="flex shrink-0 gap-2">
+                        <div className="flex shrink-0 gap-2 self-start">
                           <Button variant="secondary" onClick={() => goToLocation(Number(lid), "submissions")}>
                             Открыть
                           </Button>
